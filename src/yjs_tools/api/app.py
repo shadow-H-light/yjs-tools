@@ -5,19 +5,24 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from yjs_tools import __version__
 from yjs_tools.db import connect, init_db
 from yjs_tools.journal import (
+    compare_journals,
     delete_batch,
     get_journal,
     import_metrics_csv,
     ingest_openalex,
+    journals_to_csv,
     list_batches,
+    parse_ids,
     search_journals,
     stats,
 )
+from yjs_tools.journal.compare import CompareError
 from yjs_tools.journal.importer import MetricsImportError
 from yjs_tools.paths import DEFAULT_DB_PATH, WEB_DIST
 
@@ -101,6 +106,48 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         if journal is None:
             raise HTTPException(status_code=404, detail="journal not found")
         return journal.to_dict()
+
+    @app.get("/api/compare")
+    def api_compare(
+        ids: str = Query(...),
+        year: int | None = Query(default=None, ge=1900, le=2100),
+    ):
+        try:
+            journals = compare_journals(db(), parse_ids(ids), year=year)
+        except (CompareError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"count": len(journals), "results": [j.to_dict() for j in journals]}
+
+    @app.get("/api/export")
+    def api_export(
+        q: str = Query(default=""),
+        limit: int = Query(default=20, ge=1, le=100),
+        jcr: int | None = Query(default=None, ge=1, le=4),
+        cas: int | None = Query(default=None, ge=1, le=4),
+        year: int | None = Query(default=None, ge=1900, le=2100),
+        ids: str | None = Query(default=None),
+    ):
+        try:
+            if ids:
+                journals = compare_journals(db(), parse_ids(ids), year=year)
+            else:
+                journals = search_journals(
+                    db(),
+                    q,
+                    limit=limit,
+                    jcr_quartile=jcr,
+                    cas_quartile=cas,
+                    year=year,
+                    resolve_remote=True,
+                ).journals
+        except (CompareError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        csv_text = journals_to_csv(journals)
+        return PlainTextResponse(
+            csv_text,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=xuankan.csv"},
+        )
 
     @app.post("/api/ingest")
     def api_ingest(

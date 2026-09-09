@@ -14,6 +14,7 @@ type Official = {
   warning: boolean;
   filename: string | null;
   source: string | null;
+  review_days: number | null;
 };
 
 type Journal = {
@@ -29,6 +30,7 @@ type Journal = {
   topics: Topic[];
   matched_topics: Topic[];
   official: Official | null;
+  review_days?: number | null;
 };
 
 type Stats = {
@@ -76,6 +78,8 @@ export default function App() {
   const [hint, setHint] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [importYear, setImportYear] = useState("2025");
+  const [selected, setSelected] = useState<number[]>([]);
+  const [compared, setCompared] = useState<Journal[] | null>(null);
 
   async function refreshMeta() {
     const [nextStats, nextBatches] = await Promise.all([
@@ -174,6 +178,44 @@ export default function App() {
     }
   }
 
+  function toggleSelect(id: number) {
+    setSelected((current) => {
+      if (current.includes(id)) {
+        return current.filter((item) => item !== id);
+      }
+      if (current.length >= 4) {
+        return current;
+      }
+      return [...current, id];
+    });
+  }
+
+  async function onCompare() {
+    if (selected.length < 2) {
+      setError("请勾选 2–4 本期刊再对比");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await api<{ results: Journal[] }>(
+        `/api/compare?ids=${selected.join(",")}`,
+      );
+      setCompared(data.results);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "对比失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function downloadCsv(path: string) {
+    const link = document.createElement("a");
+    link.href = path;
+    link.download = "xuankan.csv";
+    link.click();
+  }
+
   return (
     <main>
       <header>
@@ -225,6 +267,33 @@ export default function App() {
         >
           同步 OpenAlex
         </button>
+        <button
+          type="button"
+          className="secondary"
+          onClick={onCompare}
+          disabled={busy || selected.length < 2}
+        >
+          对比已选（{selected.length}）
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => {
+            const params = new URLSearchParams();
+            if (selected.length >= 2) {
+              params.set("ids", selected.join(","));
+            } else {
+              params.set("q", query);
+              params.set("limit", "20");
+              if (jcr) params.set("jcr", jcr);
+              if (cas) params.set("cas", cas);
+            }
+            downloadCsv(`/api/export?${params.toString()}`);
+          }}
+          disabled={busy}
+        >
+          导出 CSV
+        </button>
       </form>
 
       <form className="row import-row" onSubmit={onImport}>
@@ -271,6 +340,75 @@ export default function App() {
       )}
       {hint && <p className="hint">{hint}</p>}
       {error && <p className="error">{error}</p>}
+      {compared && compared.length > 0 && (
+        <section className="compare">
+          <h2>对比</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>项目</th>
+                {compared.map((journal) => (
+                  <th key={journal.id}>{journal.display_name}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th>ISSN</th>
+                {compared.map((journal) => (
+                  <td key={journal.id}>{journal.issn_l || "暂无"}</td>
+                ))}
+              </tr>
+              <tr>
+                <th>JCR</th>
+                {compared.map((journal) => (
+                  <td key={journal.id}>
+                    {journal.official?.jcr_quartile
+                      ? `Q${journal.official.jcr_quartile}`
+                      : "暂无"}
+                  </td>
+                ))}
+              </tr>
+              <tr>
+                <th>影响因子</th>
+                {compared.map((journal) => (
+                  <td key={journal.id}>
+                    {journal.official?.impact_factor ?? "暂无"}
+                  </td>
+                ))}
+              </tr>
+              <tr>
+                <th>中科院</th>
+                {compared.map((journal) => (
+                  <td key={journal.id}>
+                    {journal.official?.cas_quartile
+                      ? `${journal.official.cas_quartile} 区`
+                      : "暂无"}
+                  </td>
+                ))}
+              </tr>
+              <tr>
+                <th>审稿时长</th>
+                {compared.map((journal) => (
+                  <td key={journal.id}>
+                    {journal.official?.review_days != null
+                      ? `${journal.official.review_days} 天`
+                      : "暂无"}
+                  </td>
+                ))}
+              </tr>
+              <tr>
+                <th>被引</th>
+                {compared.map((journal) => (
+                  <td key={journal.id}>
+                    {journal.cited_by_count.toLocaleString()}
+                  </td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      )}
       {!error && results.length === 0 && (
         <p className="empty">没有结果。先同步 OpenAlex，或导入分区表后再筛选。</p>
       )}
@@ -278,13 +416,20 @@ export default function App() {
       {results.map((journal) => (
         <article key={journal.id}>
           <h2>
-            {journal.homepage ? (
+            <label>
+              <input
+                type="checkbox"
+                checked={selected.includes(journal.id)}
+                onChange={() => toggleSelect(journal.id)}
+              />{" "}
+              {journal.homepage ? (
               <a href={journal.homepage} target="_blank" rel="noreferrer">
                 {journal.display_name}
               </a>
             ) : (
               journal.display_name
             )}
+            </label>
           </h2>
           <div className="facts">
             <span>ISSN {journal.issn_l || "暂无"}</span>
@@ -297,6 +442,12 @@ export default function App() {
                 : `${journal.citedness_2yr.toFixed(1)} · OpenAlex`}
             </span>
             {journal.is_oa && <span>OA</span>}
+            <span>
+              审稿{" "}
+              {journal.official?.review_days != null
+                ? `${journal.official.review_days} 天`
+                : "暂无"}
+            </span>
           </div>
           {journal.official ? (
             <div className="facts official">

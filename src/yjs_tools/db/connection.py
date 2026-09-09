@@ -22,4 +22,9 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(journal_metrics)")
+    }
+    if "review_days" not in columns:
+        conn.execute("ALTER TABLE journal_metrics ADD COLUMN review_days INTEGER")
     conn.commit()

@@ -34,6 +34,12 @@ HEADER_MAP = {
     "中科院": "cas_quartile",
     "warning": "warning",
     "预警": "warning",
+    "reviewdays": "review_days",
+    "reviewday": "review_days",
+    "审稿时长": "review_days",
+    "审稿天数": "review_days",
+    "reviewweeks": "review_weeks",
+    "审稿周数": "review_weeks",
 }
 
 QUARTILE_MAP = {
@@ -121,8 +127,8 @@ def import_metrics_csv(
             """
             INSERT INTO journal_metrics (
                 batch_id, journal_id, year, jcr_quartile, impact_factor,
-                impact_factor_5, cas_quartile, warning
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                impact_factor_5, cas_quartile, warning, review_days
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 batch_id,
@@ -133,6 +139,7 @@ def import_metrics_csv(
                 _as_float(row.get("impact_factor_5")),
                 _as_quartile(row.get("cas_quartile")),
                 1 if _as_bool(row.get("warning")) else 0,
+                _as_review_days(row.get("review_days"), row.get("review_weeks")),
             ),
         )
         matched += 1
@@ -262,3 +269,22 @@ def _as_bool(value: str | None) -> bool:
     if not value:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "y", "是", "预警"}
+
+
+def _as_review_days(days: str | None, weeks: str | None) -> int | None:
+    parsed = _as_int(days)
+    if parsed is not None:
+        return parsed
+    week_count = _as_float(weeks)
+    if week_count is None:
+        return None
+    return int(round(week_count * 7))
+
+
+def _as_int(value: str | None) -> int | None:
+    if not value:
+        return None
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    if not digits:
+        return None
+    return int(digits)

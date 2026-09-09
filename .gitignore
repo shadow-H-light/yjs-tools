@@ -40,3 +40,4 @@ venv/
 .cache/
 .pytest_cache/
 .python-version
+xuankan-export.csv

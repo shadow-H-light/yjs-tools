@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS journal_metrics (
     impact_factor REAL,
     impact_factor_5 REAL,
     cas_quartile INTEGER,
-    warning INTEGER NOT NULL DEFAULT 0
+    warning INTEGER NOT NULL DEFAULT 0,
+    review_days INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_journals_issn_l ON journals(issn_l);

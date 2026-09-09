@@ -40,6 +40,8 @@ uv sync --extra dev
 uv run xuankan ingest --limit 200
 uv run xuankan import examples/metrics-sample-2025.csv --year 2025 --source sample
 uv run xuankan search Nature --jcr 1
+uv run xuankan compare 1,2
+uv run xuankan export --query Nature --out xuankan-export.csv
 uv run xuankan serve
 ```
 

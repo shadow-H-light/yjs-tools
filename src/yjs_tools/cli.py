@@ -9,13 +9,17 @@ import uvicorn
 from yjs_tools.api import create_app
 from yjs_tools.db import connect, init_db
 from yjs_tools.journal import (
+    compare_journals,
     delete_batch,
     import_metrics_file,
     ingest_openalex,
+    journals_to_csv,
     list_batches,
+    parse_ids,
     search_journals,
     stats,
 )
+from yjs_tools.journal.compare import CompareError
 from yjs_tools.journal.importer import MetricsImportError
 from yjs_tools.paths import DEFAULT_DB_PATH
 
@@ -153,9 +157,85 @@ def search(
                 official = " ".join(bits)
             matched = "；".join(t.topic_name for t in j.matched_topics[:3])
             extra = f"\t命中 {matched}" if matched else ""
+            review = "暂无"
+            if j.official and j.official.review_days is not None:
+                review = f"审稿 {j.official.review_days} 天"
             typer.echo(
-                f"{j.display_name}\t{issn}\t被引 {j.cited_by_count}\t{official}{extra}"
+                f"{j.display_name}\t{issn}\t被引 {j.cited_by_count}\t{official}\t{review}{extra}"
             )
+    finally:
+        conn.close()
+
+
+@app.command()
+def compare(
+    ids: str,
+    year: Optional[int] = None,
+    db: Path = DEFAULT_DB_PATH,
+) -> None:
+    """并排对比 2–4 本刊，期刊 id 用逗号分隔。"""
+    conn = _db(db)
+    try:
+        journals = compare_journals(conn, parse_ids(ids), year=year)
+        for j in journals:
+            review = "暂无"
+            if j.official and j.official.review_days is not None:
+                review = f"{j.official.review_days} 天"
+            jcr = (
+                f"Q{j.official.jcr_quartile}"
+                if j.official and j.official.jcr_quartile
+                else "暂无"
+            )
+            factor = (
+                str(j.official.impact_factor)
+                if j.official and j.official.impact_factor is not None
+                else "暂无"
+            )
+            cas = (
+                f"{j.official.cas_quartile}区"
+                if j.official and j.official.cas_quartile
+                else "暂无"
+            )
+            typer.echo(
+                f"{j.display_name}\t{j.issn_l or '-'}\tJCR {jcr}\tIF {factor}\t"
+                f"中科院 {cas}\t审稿 {review}"
+            )
+    except (CompareError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        conn.close()
+
+
+@app.command("export")
+def export_cmd(
+    query: str = "",
+    out: Path = Path("xuankan-export.csv"),
+    ids: Optional[str] = None,
+    jcr: Optional[int] = None,
+    cas: Optional[int] = None,
+    limit: int = 20,
+    db: Path = DEFAULT_DB_PATH,
+) -> None:
+    """把检索结果或对比列表导出为 CSV。缺审稿写暂无。"""
+    conn = _db(db)
+    try:
+        if ids:
+            journals = compare_journals(conn, parse_ids(ids))
+        else:
+            journals = search_journals(
+                conn,
+                query,
+                limit=limit,
+                jcr_quartile=jcr,
+                cas_quartile=cas,
+                resolve_remote=True,
+            ).journals
+        out.write_text(journals_to_csv(journals), encoding="utf-8")
+        typer.echo(f"已写入 {out}（{len(journals)} 行）")
+    except (CompareError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
     finally:
         conn.close()
 

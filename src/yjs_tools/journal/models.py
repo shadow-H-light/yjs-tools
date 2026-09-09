@@ -19,6 +19,7 @@ class OfficialMetrics:
     impact_factor_5: float | None = None
     cas_quartile: int | None = None
     warning: bool = False
+    review_days: int | None = None
     filename: str | None = None
     source: str | None = None
 
@@ -30,6 +31,7 @@ class OfficialMetrics:
             "impact_factor_5": self.impact_factor_5,
             "cas_quartile": self.cas_quartile,
             "warning": self.warning,
+            "review_days": self.review_days,
             "filename": self.filename,
             "source": self.source,
         }

@@ -165,3 +165,33 @@ button.link {
   color: #5c5c5c;
   text-decoration: underline;
 }
+
+.compare {
+  margin: 0 0 24px;
+  overflow-x: auto;
+}
+
+.compare h2 {
+  font-size: 18px;
+  margin: 0 0 8px;
+}
+
+.compare table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  font-size: 14px;
+}
+
+.compare th,
+.compare td {
+  border: 1px solid #e4dfd4;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+article h2 label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}

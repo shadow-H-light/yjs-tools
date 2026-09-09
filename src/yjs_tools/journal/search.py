@@ -302,7 +302,7 @@ def _load_official(
 ) -> OfficialMetrics | None:
     sql = """
         SELECT m.year, m.jcr_quartile, m.impact_factor, m.impact_factor_5,
-               m.cas_quartile, m.warning, b.filename, b.source
+               m.cas_quartile, m.warning, m.review_days, b.filename, b.source
         FROM journal_metrics m
         JOIN import_batches b ON b.id = m.batch_id
         WHERE m.journal_id = ?
@@ -322,6 +322,7 @@ def _load_official(
         impact_factor_5=row["impact_factor_5"],
         cas_quartile=row["cas_quartile"],
         warning=bool(row["warning"]),
+        review_days=row["review_days"],
         filename=row["filename"],
         source=row["source"],
     )
