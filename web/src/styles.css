@@ -1,0 +1,161 @@
+:root {
+  color: #1a1a1a;
+  background: #f6f4ef;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 32px 20px 64px;
+}
+
+header h1 {
+  margin: 0 0 4px;
+  font-size: 28px;
+  font-weight: 650;
+}
+
+header p {
+  margin: 0 0 20px;
+  color: #5c5c5c;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+input[type="search"],
+input[type="number"],
+input[type="file"],
+select {
+  flex: 1 1 160px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #cfc8b8;
+  background: #fff;
+  font: inherit;
+}
+
+input[type="search"] {
+  flex: 1 1 280px;
+}
+
+input[type="number"] {
+  flex: 0 0 96px;
+}
+
+button {
+  padding: 10px 14px;
+  border: 1px solid #1a1a1a;
+  background: #1a1a1a;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #fff;
+  color: #1a1a1a;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.meta,
+.empty,
+.error {
+  color: #5c5c5c;
+  margin: 0 0 16px;
+}
+
+.error {
+  color: #8a1f1f;
+}
+
+article {
+  background: #fff;
+  border: 1px solid #e4dfd4;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+}
+
+article h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+article a {
+  color: inherit;
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0 0 8px;
+  color: #444;
+  font-size: 14px;
+}
+
+.topics {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.topics li {
+  font-size: 12px;
+  padding: 2px 8px;
+  background: #f0ebe1;
+}
+
+.hint {
+  margin: 0 0 8px;
+  color: #7a7468;
+  font-size: 13px;
+}
+
+.official span:last-child {
+  color: #7a7468;
+}
+
+.batches {
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+  color: #5c5c5c;
+  font-size: 14px;
+}
+
+.batches li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+button.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #5c5c5c;
+  text-decoration: underline;
+}

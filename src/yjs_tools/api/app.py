@@ -1,0 +1,149 @@
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from yjs_tools import __version__
+from yjs_tools.db import connect, init_db
+from yjs_tools.journal import (
+    delete_batch,
+    get_journal,
+    import_metrics_csv,
+    ingest_openalex,
+    list_batches,
+    search_journals,
+    stats,
+)
+from yjs_tools.journal.importer import MetricsImportError
+from yjs_tools.paths import DEFAULT_DB_PATH, WEB_DIST
+
+
+def _open_db(path: Path):
+    conn = connect(path)
+    init_db(conn)
+    return conn
+
+
+def create_app(db_path: Path | None = None) -> FastAPI:
+    path = db_path or DEFAULT_DB_PATH
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.db = _open_db(path)
+        try:
+            yield
+        finally:
+            app.state.db.close()
+
+    app = FastAPI(
+        title="选刊神器",
+        version=__version__,
+        lifespan=lifespan,
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+            "http://127.0.0.1:8765",
+            "http://localhost:8765",
+        ],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @app.get("/api/health")
+    def health():
+        return {"ok": True, "version": __version__, "db": str(path)}
+
+    def db():
+        conn = getattr(app.state, "db", None)
+        if conn is None:
+            conn = _open_db(path)
+            app.state.db = conn
+        return conn
+
+    @app.get("/api/stats")
+    def api_stats():
+        return stats(db())
+
+    @app.get("/api/journals")
+    def api_search(
+        q: str = Query(default=""),
+        limit: int = Query(default=20, ge=1, le=100),
+        jcr: int | None = Query(default=None, ge=1, le=4),
+        cas: int | None = Query(default=None, ge=1, le=4),
+        year: int | None = Query(default=None, ge=1900, le=2100),
+        warning: bool | None = Query(default=None),
+    ):
+        items = search_journals(
+            db(),
+            q,
+            limit=limit,
+            jcr_quartile=jcr,
+            cas_quartile=cas,
+            year=year,
+            warning=warning,
+        )
+        return {"query": q, "count": len(items), "results": [j.to_dict() for j in items]}
+
+    @app.get("/api/journals/{journal_id}")
+    def api_detail(
+        journal_id: int,
+        year: int | None = Query(default=None, ge=1900, le=2100),
+    ):
+        journal = get_journal(db(), journal_id, year=year)
+        if journal is None:
+            raise HTTPException(status_code=404, detail="journal not found")
+        return journal.to_dict()
+
+    @app.post("/api/ingest")
+    def api_ingest(
+        limit: int = Query(default=200, ge=1, le=500),
+        query: str | None = Query(default=None),
+    ):
+        result = ingest_openalex(db(), limit=limit, query=query)
+        return {**result, "stats": stats(db())}
+
+    @app.get("/api/imports")
+    def api_list_imports():
+        return {"results": list_batches(db())}
+
+    @app.post("/api/imports")
+    async def api_import(
+        file: UploadFile = File(...),
+        year: str | None = Form(default=None),
+        source: str = Form(default="csv"),
+    ):
+        raw = await file.read()
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw.decode("gbk")
+        year_int = int(year) if year and year.strip() else None
+        try:
+            result = import_metrics_csv(
+                db(),
+                content=text,
+                filename=file.filename or "upload.csv",
+                year=year_int,
+                source=source or "csv",
+            )
+        except MetricsImportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {**result, "stats": stats(db())}
+
+    @app.delete("/api/imports/{batch_id}")
+    def api_delete_import(batch_id: int):
+        if not delete_batch(db(), batch_id):
+            raise HTTPException(status_code=404, detail="import batch not found")
+        return {"ok": True, "stats": stats(db())}
+
+    if WEB_DIST.exists():
+        app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="ui")
+
+    return app

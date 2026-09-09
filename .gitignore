@@ -28,6 +28,15 @@ __pycache__/
 venv/
 *.pyc
 
+# Local journal data
+/data/*
+!/data/.gitkeep
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
 # Misc
 *.tmp
 .cache/
+.pytest_cache/
+.python-version
