@@ -219,7 +219,9 @@ export default function App() {
   return (
     <main>
       <header>
-        <h1>选刊神器</h1>
+        <h1>
+          选刊神器 <span className="version">v0.1</span>
+        </h1>
         <p>
           本机国际刊检索。影响因子和分区只来自你导入的表，未导入就不显示。不负责投稿。
         </p>

@@ -35,6 +35,14 @@ def test_search_api(tmp_path: Path):
         health = client.get("/api/health")
         assert health.status_code == 200
         assert health.json()["ok"] is True
+        assert health.json()["version"] == "0.1.0"
+
+        bad = client.post(
+            "/api/imports",
+            files={"file": ("bad.csv", b"name,year\nNature,2025", "text/csv")},
+        )
+        assert bad.status_code == 400
+        assert "ISSN" in bad.json()["detail"]
 
         found = client.get("/api/journals", params={"q": "nature"})
         assert found.status_code == 200

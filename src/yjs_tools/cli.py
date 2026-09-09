@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Optional
 
+import httpx
 import typer
 import uvicorn
 
+from yjs_tools import __version__
 from yjs_tools.api import create_app
 from yjs_tools.db import connect, init_db
+from yjs_tools.errors import explain_error
 from yjs_tools.journal import (
     compare_journals,
     delete_batch,
@@ -21,15 +25,43 @@ from yjs_tools.journal import (
 )
 from yjs_tools.journal.compare import CompareError
 from yjs_tools.journal.importer import MetricsImportError
-from yjs_tools.paths import DEFAULT_DB_PATH
+from yjs_tools.paths import DEFAULT_DB_PATH, WEB_DIST
 
 app = typer.Typer(help="选刊神器：本机国际刊检索。", no_args_is_help=True)
 
 
+def _version_flag(value: bool) -> None:
+    if value:
+        typer.echo(f"xuankan {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        help="显示版本。",
+        callback=_version_flag,
+        is_eager=True,
+    ),
+) -> None:
+    return
+
+
+def _fail(exc: BaseException) -> None:
+    typer.echo(explain_error(exc), err=True)
+    raise typer.Exit(code=1) from exc
+
+
 def _db(db_path: Path):
-    conn = connect(db_path)
-    init_db(conn)
-    return conn
+    try:
+        conn = connect(db_path)
+        init_db(conn)
+        return conn
+    except Exception as exc:
+        _fail(exc)
 
 
 @app.command()
@@ -39,6 +71,12 @@ def serve(
     db: Path = DEFAULT_DB_PATH,
 ) -> None:
     """启动本机服务。"""
+    if not WEB_DIST.exists():
+        typer.echo(
+            "未找到 web/dist。先执行：cd web && npm install && npm run build\n"
+            "或另开终端 npm run dev（http://127.0.0.1:5173）。API 仍可用。",
+            err=True,
+        )
     uvicorn.run(create_app(db), host=host, port=port, log_level="info")
 
 
@@ -58,6 +96,8 @@ def ingest(
         )
         s = stats(conn)
         typer.echo(f"库中现有期刊 {s['journals']} 种")
+    except (httpx.HTTPError, OSError, sqlite3.OperationalError) as exc:
+        _fail(exc)
     finally:
         conn.close()
 
@@ -79,9 +119,8 @@ def import_csv(
         )
         if result["unmatched_issns"]:
             typer.echo("未入库 ISSN：" + ", ".join(result["unmatched_issns"][:20]))
-    except MetricsImportError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
+    except (MetricsImportError, UnicodeDecodeError, OSError, sqlite3.OperationalError) as exc:
+        _fail(exc)
     finally:
         conn.close()
 

@@ -3,7 +3,12 @@ from __future__ import annotations
 import sqlite3
 
 from yjs_tools.db import init_db
-from yjs_tools.journal.importer import delete_batch, import_metrics_csv, list_batches
+from yjs_tools.journal.importer import (
+    MetricsImportError,
+    delete_batch,
+    import_metrics_csv,
+    list_batches,
+)
 from yjs_tools.journal.ingest import _upsert_source
 from yjs_tools.journal.search import search_journals
 
@@ -88,3 +93,12 @@ def test_import_filter_and_delete():
     assert delete_batch(conn, batches[0]["id"]) is True
     assert search_journals(conn, "nature").journals[0].official is None
     assert search_journals(conn, jcr_quartile=1).journals == []
+
+
+def test_import_missing_issn_column():
+    conn = _conn()
+    try:
+        import_metrics_csv(conn, content="name,year\nNature,2025", filename="bad.csv")
+        raise AssertionError("expected MetricsImportError")
+    except MetricsImportError as exc:
+        assert "ISSN" in str(exc)

@@ -25,6 +25,13 @@ header h1 {
   font-weight: 650;
 }
 
+header .version {
+  margin-left: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #7a7a7a;
+}
+
 header p {
   margin: 0 0 20px;
   color: #5c5c5c;

@@ -13,3 +13,4 @@
 | [数据策略](./xuan-kan/data.md) | 本机 SQLite、导入器、关键词匹配 |
 | [技术栈](./xuan-kan/tech-stack.md) | 选定的 B（本地版）+ A/B 对比存档 |
 | [开发计划](./xuan-kan/roadmap.md) | M0–M5 与插件二期 |
+| [使用说明](./xuan-kan/usage.md) | v0.1 安装、启动、排错 |

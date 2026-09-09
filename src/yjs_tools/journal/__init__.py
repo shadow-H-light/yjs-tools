@@ -1,5 +1,6 @@
 from yjs_tools.journal.compare import compare_journals, journals_to_csv, parse_ids
 from yjs_tools.journal.importer import (
+    decode_csv_bytes,
     delete_batch,
     import_metrics_csv,
     import_metrics_file,
@@ -10,6 +11,7 @@ from yjs_tools.journal.search import get_journal, search_journals, stats
 
 __all__ = [
     "compare_journals",
+    "decode_csv_bytes",
     "delete_batch",
     "get_journal",
     "import_metrics_csv",

@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+import httpx
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from yjs_tools import __version__
 from yjs_tools.db import connect, init_db
+from yjs_tools.errors import explain_error
 from yjs_tools.journal import (
     compare_journals,
+    decode_csv_bytes,
     delete_batch,
     get_journal,
     import_metrics_csv,
@@ -71,6 +75,14 @@ def create_app(db_path: Path | None = None) -> FastAPI:
             conn = _open_db(path)
             app.state.db = conn
         return conn
+
+    @app.exception_handler(httpx.HTTPError)
+    async def httpx_error(_request: Request, exc: httpx.HTTPError):
+        return JSONResponse(status_code=502, content={"detail": explain_error(exc)})
+
+    @app.exception_handler(sqlite3.OperationalError)
+    async def sqlite_error(_request: Request, exc: sqlite3.OperationalError):
+        return JSONResponse(status_code=503, content={"detail": explain_error(exc)})
 
     @app.get("/api/stats")
     def api_stats():
@@ -169,9 +181,9 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     ):
         raw = await file.read()
         try:
-            text = raw.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            text = raw.decode("gbk")
+            text = decode_csv_bytes(raw)
+        except MetricsImportError as exc:
+            raise HTTPException(status_code=400, detail=explain_error(exc)) from exc
         year_int = int(year) if year and year.strip() else None
         try:
             result = import_metrics_csv(
@@ -182,7 +194,7 @@ def create_app(db_path: Path | None = None) -> FastAPI:
                 source=source or "csv",
             )
         except MetricsImportError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=explain_error(exc)) from exc
         return {**result, "stats": stats(db())}
 
     @app.delete("/api/imports/{batch_id}")

@@ -160,6 +160,17 @@ def import_metrics_csv(
     }
 
 
+def decode_csv_bytes(raw: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-8", "gbk"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise MetricsImportError(
+        "CSV 编码无法识别，请用 Excel「另存为」UTF-8 CSV 后再导入。"
+    )
+
+
 def import_metrics_file(
     conn: sqlite3.Connection,
     path: Path,
@@ -167,7 +178,7 @@ def import_metrics_file(
     year: int | None = None,
     source: str = "csv",
 ) -> dict:
-    text = path.read_text(encoding="utf-8-sig")
+    text = decode_csv_bytes(path.read_bytes())
     return import_metrics_csv(
         conn,
         content=text,
