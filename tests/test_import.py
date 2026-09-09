@@ -105,3 +105,44 @@ def test_import_missing_issn_column():
         raise AssertionError("expected MetricsImportError")
     except MetricsImportError as exc:
         assert "ISSN" in str(exc)
+
+
+def test_import_jcr_style_and_best_quartile():
+    conn = _conn()
+    result = import_metrics_csv(
+        conn,
+        content="""ISSN,EISSN,影响因子,分区
+0028-0836,1476-4687,48.5,Q2
+0028-0836,1476-4687,48.5,Q1
+2169-3536,,3.4,N/A
+0000-000X,,0.1,Q4
+""",
+        filename="jcr.xlsx",
+        year=2026,
+        source="jcr",
+    )
+    assert result["matched"] == 2
+    assert result["unmatched"] == 1
+    nature = search_journals(conn, "nature", year=2026).journals[0]
+    assert nature.official is not None
+    assert nature.official.impact_factor == 48.5
+    assert nature.official.jcr_quartile == 1
+    access = search_journals(conn, "IEEE Access", year=2026).journals[0]
+    assert access.official is not None
+    assert access.official.impact_factor == 3.4
+    assert access.official.jcr_quartile is None
+
+
+def test_import_matches_eissn():
+    conn = _conn()
+    result = import_metrics_csv(
+        conn,
+        content="ISSN,EISSN,影响因子,分区\n,1476-4687,12.3,Q1\n",
+        filename="eissn.csv",
+        year=2026,
+        source="jcr",
+    )
+    assert result["matched"] == 1
+    nature = search_journals(conn, "nature", year=2026).journals[0]
+    assert nature.official is not None
+    assert nature.official.impact_factor == 12.3

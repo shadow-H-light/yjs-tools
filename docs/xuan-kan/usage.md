@@ -20,7 +20,7 @@ cd ..
 uv run xuankan serve
 ```
 
-浏览器打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。
+浏览器打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。顶栏可切换「选刊神器」和「公司查询」。
 
 之后每次只要一条命令：
 
@@ -32,7 +32,7 @@ uv run xuankan serve
 
 ## 日常流程
 
-1. `uv run xuankan ingest --limit 200 --scope all` — 从 OpenAlex 同步国际刊和中文刊。已有库请再同步一次以写入中文刊标记。
+1. `uv run xuankan ingest --limit 800 --scope all` — 从 OpenAlex 全面同步国际刊和中文刊；ISSN、主页、被引缺失时会重试拉取。影响因子和分区仍需下一步导入。
 2. `uv run xuankan import 你的表.csv --year 2025` — 导入分区 / IF / 可选审稿时长。
 3. 网页检索：搜索栏左侧选 **智能 / 刊名 / 主题 / ISSN**。例如主题搜 `sensor` 或 `传感器`。
    CLI：`uv run xuankan search 传感器 --by topic`
@@ -45,7 +45,7 @@ uv run xuankan serve
 uv run xuankan import examples/metrics-sample-2025.csv --year 2025 --source sample
 ```
 
-CSV 建议 UTF-8。列名可用：`issn`、`year`、`jcr_quartile`、`impact_factor`、`cas_quartile`、`warning`、`review_days`（或中文别名，见样例表头）。
+CSV 或科睿唯安 JCR 的 `.xlsx` 均可。列名可用：`issn`、`EISSN`、`year`、`jcr_quartile` / `分区`、`impact_factor` / `影响因子`、`cas_quartile`、`warning`、`review_days`（或中文别名）。同一 ISSN 多学科时保留最好的 JCR 分区。
 
 查看版本：`uv run xuankan --version`。
 
@@ -59,7 +59,8 @@ CSV 建议 UTF-8。列名可用：`issn`、`year`、`jcr_quartile`、`impact_fac
 | 数据库正被占用 | 关掉另一个 `xuankan serve`，或结束占用 `data/xuankan.sqlite` 的进程 |
 | 打开 8765 没有页面 | 先 `cd web && npm install && npm run build`，或用 `npm run dev` |
 | 筛选里没有 JCR / 中科院 | 还没导入官方指标 CSV；未导入时故意不显示假数字 |
-| 审稿显示「暂无」 | CSV 里该刊没有 `review_days`，属正常 |
+| 审稿显示「暂无」或不显示 | CSV 里该刊没有 `review_days`，属正常；审稿是非必要信息 |
+| 影响因子 / 分区显示「暂无」 | OpenAlex 没有 JCR IF 或中科院分区；导入你的官方 CSV 后才会出现 |
 | 搜「传感器」没有结果 | 先 `ingest --scope all`；搜索类型选「主题」。中文刊来自 OpenAlex，不是知网核心目录 |
 
 本工具不爬 Clarivate、LetPub、知网。官方分区请用你有权使用的表导入。

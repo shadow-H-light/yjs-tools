@@ -86,3 +86,124 @@ CREATE TRIGGER IF NOT EXISTS journals_au AFTER UPDATE ON journals BEGIN
     INSERT INTO journals_fts(rowid, display_name, issn_l, issns, publisher)
     VALUES (new.id, new.display_name, new.issn_l, new.issns, new.publisher);
 END;
+
+CREATE TABLE IF NOT EXISTS companies (
+    id INTEGER PRIMARY KEY,
+    wikidata_id TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    aliases TEXT,
+    homepage TEXT,
+    ticker TEXT,
+    credit_code TEXT,
+    country_code TEXT,
+    hq_city TEXT,
+    ownership TEXT,
+    is_central_soe INTEGER NOT NULL DEFAULT 0,
+    bianzhi TEXT,
+    size_band TEXT,
+    foreign_origin TEXT,
+    employees INTEGER,
+    founded_year INTEGER,
+    salary_note TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS company_industries (
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    industry TEXT NOT NULL,
+    PRIMARY KEY (company_id, industry)
+);
+
+CREATE TABLE IF NOT EXISTS company_import_batches (
+    id INTEGER PRIMARY KEY,
+    filename TEXT NOT NULL,
+    year INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'companies',
+    source TEXT NOT NULL DEFAULT 'csv',
+    imported_at TEXT NOT NULL,
+    matched INTEGER NOT NULL DEFAULT 0,
+    unmatched INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS company_jobs (
+    id INTEGER PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    batch_id INTEGER REFERENCES company_import_batches(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    major TEXT,
+    city TEXT,
+    education TEXT,
+    year INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS recruitment_rounds (
+    id INTEGER PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    batch_id INTEGER REFERENCES company_import_batches(id) ON DELETE SET NULL,
+    year INTEGER NOT NULL,
+    season TEXT NOT NULL,
+    start_date TEXT,
+    end_date TEXT,
+    headcount INTEGER,
+    source TEXT
+);
+
+CREATE TABLE IF NOT EXISTS company_finance (
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    year INTEGER NOT NULL,
+    revenue REAL,
+    net_income REAL,
+    currency TEXT,
+    source TEXT,
+    PRIMARY KEY (company_id, year, source)
+);
+
+CREATE TABLE IF NOT EXISTS company_disputes (
+    id INTEGER PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    batch_id INTEGER REFERENCES company_import_batches(id) ON DELETE CASCADE,
+    year INTEGER,
+    case_type TEXT,
+    summary TEXT,
+    url TEXT
+);
+
+CREATE TABLE IF NOT EXISTS company_universities (
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    university TEXT NOT NULL,
+    relation TEXT,
+    works_count INTEGER,
+    source TEXT,
+    PRIMARY KEY (company_id, university, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_companies_ticker ON companies(ticker);
+CREATE INDEX IF NOT EXISTS idx_companies_ownership ON companies(ownership);
+CREATE INDEX IF NOT EXISTS idx_jobs_company ON company_jobs(company_id);
+CREATE INDEX IF NOT EXISTS idx_rounds_company ON recruitment_rounds(company_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS companies_fts USING fts5(
+    display_name,
+    aliases,
+    ticker,
+    wikidata_id,
+    content='companies',
+    content_rowid='id'
+);
+
+CREATE TRIGGER IF NOT EXISTS companies_ai AFTER INSERT ON companies BEGIN
+    INSERT INTO companies_fts(rowid, display_name, aliases, ticker, wikidata_id)
+    VALUES (new.id, new.display_name, new.aliases, new.ticker, new.wikidata_id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS companies_ad AFTER DELETE ON companies BEGIN
+    INSERT INTO companies_fts(companies_fts, rowid, display_name, aliases, ticker, wikidata_id)
+    VALUES ('delete', old.id, old.display_name, old.aliases, old.ticker, old.wikidata_id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS companies_au AFTER UPDATE ON companies BEGIN
+    INSERT INTO companies_fts(companies_fts, rowid, display_name, aliases, ticker, wikidata_id)
+    VALUES ('delete', old.id, old.display_name, old.aliases, old.ticker, old.wikidata_id);
+    INSERT INTO companies_fts(rowid, display_name, aliases, ticker, wikidata_id)
+    VALUES (new.id, new.display_name, new.aliases, new.ticker, new.wikidata_id);
+END;

@@ -1,12 +1,12 @@
 # yjs-tools
 
-研究生阶段常用工具集。当前可用模块是**选刊神器 v0.1**：本机筛选国际刊，不负责投稿。
+研究生阶段常用工具集。当前可用：**选刊神器 v0.1**、**公司查询 v0.1**。都在本机同一服务里，不投稿、不投递。
 
 ## 选刊神器 v0.1
 
 本机同步 OpenAlex 国际刊与中文刊，按刊名 / 主题 / ISSN 检索（中英文方向词可互译），用本地 CSV 导入分区与影响因子，对比 2–4 本刊并导出。数字只来自你导入的表。
 
-规划在 [docs](./docs/README.md)，安装与排错见 [使用说明](./docs/xuan-kan/usage.md)。
+规划在 [docs](./docs/README.md)，安装与排错见 [选刊使用说明](./docs/xuan-kan/usage.md)。
 
 ### 同学安装
 
@@ -21,10 +21,10 @@ cd web && npm install && npm run build && cd ..
 uv run xuankan serve
 ```
 
-打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。之后启动只要最后一条。
+打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。之后启动只要最后一条。顶栏可切换选刊与公司查询。
 
 ```bash
-uv run xuankan ingest --limit 200 --scope all
+uv run xuankan ingest --limit 800 --scope all
 uv run xuankan import examples/metrics-sample-2025.csv --year 2025 --source sample
 uv run xuankan search 传感器 --by topic
 uv run xuankan compare 1,2
@@ -33,9 +33,23 @@ uv run xuankan export --query Nature --out xuankan-export.csv
 
 样例 CSV 里的分区和 IF **仅作演示**，不是官方 JCR / 中科院数据。
 
+## 公司查询 v0.1
+
+本机同步 Wikidata 企业公开档案，按名称 / 行业 / 专业 / 岗位检索，导入央企名录、编制、薪资摘录与校招表。编制不根据「央企」自动填写。不爬天眼查、BOSS、脉脉。
+
+说明见 [公司查询使用说明](./docs/gongsi/usage.md)。
+
+```bash
+uv run xuankan gongsi ingest --limit 80
+uv run xuankan gongsi import examples/companies-sample.csv --kind companies --year 2026
+uv run xuankan gongsi import examples/jobs-sample.csv --kind jobs --year 2026
+uv run xuankan gongsi search 光学工程 --by major
+uv run xuankan gongsi compare 1,2
+```
+
 ### 排错
 
-- **连不上 OpenAlex**：检查网络后重试，或把 `--limit` 调小。
+- **连不上 OpenAlex / Wikidata**：检查网络后重试，或把 `--limit` 调小。
 - **CSV 缺 ISSN 列**：表头需要 `issn` 或「刊号」。
 - **CSV 编码无法识别**：另存为 UTF-8 后再导入。
 - **数据库正被占用**：关掉另一个 `xuankan serve`。
@@ -50,7 +64,6 @@ uv run xuankan export --query Nature --out xuankan-export.csv
 | 导师查询 | 检索导师研究方向、成果与招生相关信息 |
 | 学校查询 | 了解院校、学院与培养相关情况 |
 | 就业分析 | 梳理毕业去向、行业分布与岗位趋势 |
-| 公司查询 | 查看企业背景，服务实习与就业选择 |
 
 ## 许可
 

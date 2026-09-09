@@ -33,6 +33,12 @@ header h1 {
   font-weight: 650;
 }
 
+.module-nav {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
 header .version {
   margin-left: 6px;
   font-size: 14px;
@@ -243,6 +249,38 @@ article a {
   margin: 0 0 8px;
   color: #444;
   font-size: 14px;
+}
+
+.required-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px 16px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  background: #f7f3ea;
+  border-radius: 10px;
+}
+
+.required-facts div {
+  min-width: 0;
+}
+
+.required-facts dt {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: #7a6f5d;
+}
+
+.required-facts dd {
+  margin: 2px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.required-facts a {
+  color: #1c4b8f;
 }
 
 .badge {

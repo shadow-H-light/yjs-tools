@@ -18,12 +18,12 @@ def explain_error(exc: BaseException) -> str:
             return "数据库正被占用。请先关掉另一个 xuankan serve 窗口，或结束占用 data/xuankan.sqlite 的进程。"
         return f"数据库无法打开：{exc}"
     if isinstance(exc, httpx.ConnectError):
-        return "无法连接 OpenAlex，请检查网络后重试。同步需要访问 api.openalex.org。"
+        return "无法连接 OpenAlex 或 Wikidata，请检查网络后重试。"
     if isinstance(exc, httpx.TimeoutException):
-        return "OpenAlex 请求超时，请稍后重试，或把 --limit 调小。"
+        return "OpenAlex 或 Wikidata 请求超时，请稍后重试，或把 --limit 调小。"
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code if exc.response is not None else "?"
-        return f"OpenAlex 返回 HTTP {code}，请稍后重试。"
+        return f"OpenAlex / Wikidata 返回 HTTP {code}，请稍后重试。"
     if isinstance(exc, httpx.HTTPError):
-        return "同步 OpenAlex 失败，请检查网络后重试。"
+        return "同步 OpenAlex 或 Wikidata 失败，请检查网络后重试。"
     return str(exc)

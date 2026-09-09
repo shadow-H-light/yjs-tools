@@ -13,12 +13,22 @@ from fastapi.staticfiles import StaticFiles
 from yjs_tools import __version__
 from yjs_tools.db import connect, init_db
 from yjs_tools.errors import explain_error
+from yjs_tools.company import (
+    companies_to_csv,
+    company_stats,
+    compare_companies,
+    delete_company_batch,
+    get_company,
+    import_company_bytes,
+    ingest_wikidata,
+    list_company_batches,
+    search_companies,
+)
 from yjs_tools.journal import (
     compare_journals,
-    decode_csv_bytes,
     delete_batch,
     get_journal,
-    import_metrics_csv,
+    import_metrics_bytes,
     ingest_openalex,
     journals_to_csv,
     list_batches,
@@ -49,7 +59,7 @@ def create_app(db_path: Path | None = None) -> FastAPI:
             app.state.db.close()
 
     app = FastAPI(
-        title="选刊神器",
+        title="yjs-tools",
         version=__version__,
         lifespan=lifespan,
     )
@@ -175,7 +185,7 @@ def create_app(db_path: Path | None = None) -> FastAPI:
 
     @app.post("/api/ingest")
     def api_ingest(
-        limit: int = Query(default=200, ge=1, le=500),
+        limit: int = Query(default=800, ge=1, le=2000),
         query: str | None = Query(default=None),
         scope: str = Query(default="all"),
     ):
@@ -193,15 +203,11 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         source: str = Form(default="csv"),
     ):
         raw = await file.read()
-        try:
-            text = decode_csv_bytes(raw)
-        except MetricsImportError as exc:
-            raise HTTPException(status_code=400, detail=explain_error(exc)) from exc
         year_int = int(year) if year and year.strip() else None
         try:
-            result = import_metrics_csv(
+            result = import_metrics_bytes(
                 db(),
-                content=text,
+                raw,
                 filename=file.filename or "upload.csv",
                 year=year_int,
                 source=source or "csv",
@@ -215,6 +221,116 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         if not delete_batch(db(), batch_id):
             raise HTTPException(status_code=404, detail="import batch not found")
         return {"ok": True, "stats": stats(db())}
+
+    @app.get("/api/companies/stats")
+    def api_company_stats():
+        return company_stats(db())
+
+    @app.get("/api/companies")
+    def api_companies(
+        q: str = Query(default=""),
+        limit: int = Query(default=20, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+        by: str = Query(default="auto"),
+        ownership: str | None = Query(default=None),
+        city: str | None = Query(default=None),
+        season: str | None = Query(default=None),
+        central: bool | None = Query(default=None),
+        size: str | None = Query(default=None),
+    ):
+        page = search_companies(
+            db(),
+            q,
+            limit=limit,
+            offset=offset,
+            by=by,
+            ownership=ownership,
+            city=city,
+            season=season,
+            central=central,
+            size=size,
+        )
+        return page.to_dict(q)
+
+    @app.get("/api/companies/compare")
+    def api_company_compare(ids: str = Query(...)):
+        try:
+            companies = compare_companies(db(), parse_ids(ids))
+        except (CompareError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"count": len(companies), "results": [c.to_dict() for c in companies]}
+
+    @app.get("/api/companies/export")
+    def api_company_export(
+        q: str = Query(default=""),
+        limit: int = Query(default=200, ge=1, le=500),
+        ids: str | None = Query(default=None),
+        by: str = Query(default="auto"),
+        ownership: str | None = Query(default=None),
+        city: str | None = Query(default=None),
+        season: str | None = Query(default=None),
+    ):
+        try:
+            if ids:
+                companies = compare_companies(db(), parse_ids(ids))
+            else:
+                companies = search_companies(
+                    db(), q, limit=limit, by=by, ownership=ownership, city=city, season=season
+                ).companies
+        except (CompareError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return PlainTextResponse(
+            companies_to_csv(companies),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=gongsi.csv"},
+        )
+
+    @app.post("/api/companies/ingest")
+    def api_company_ingest(
+        limit: int = Query(default=400, ge=1, le=800),
+        query: str | None = Query(default=None),
+    ):
+        result = ingest_wikidata(db(), limit=limit, query=query)
+        return {**result, "stats": company_stats(db())}
+
+    @app.get("/api/companies/imports")
+    def api_company_imports():
+        return {"results": list_company_batches(db())}
+
+    @app.post("/api/companies/imports")
+    async def api_company_import(
+        file: UploadFile = File(...),
+        year: str | None = Form(default=None),
+        kind: str = Form(default="companies"),
+        source: str = Form(default="csv"),
+    ):
+        raw = await file.read()
+        year_int = int(year) if year and year.strip() else None
+        try:
+            result = import_company_bytes(
+                db(),
+                raw,
+                filename=file.filename or "upload.csv",
+                year=year_int,
+                kind=kind,
+                source=source,
+            )
+        except MetricsImportError as exc:
+            raise HTTPException(status_code=400, detail=explain_error(exc)) from exc
+        return {**result, "stats": company_stats(db())}
+
+    @app.delete("/api/companies/imports/{batch_id}")
+    def api_company_delete_import(batch_id: int):
+        if not delete_company_batch(db(), batch_id):
+            raise HTTPException(status_code=404, detail="import batch not found")
+        return {"ok": True, "stats": company_stats(db())}
+
+    @app.get("/api/companies/{company_id}")
+    def api_company_detail(company_id: int):
+        company = get_company(db(), company_id)
+        if company is None:
+            raise HTTPException(status_code=404, detail="company not found")
+        return company.to_dict()
 
     if WEB_DIST.exists():
         app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="ui")

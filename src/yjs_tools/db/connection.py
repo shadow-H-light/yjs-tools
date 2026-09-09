@@ -13,10 +13,11 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     if path != Path(":memory:"):
         ensure_data_dir()
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, check_same_thread=False)
+    conn = sqlite3.connect(path, check_same_thread=False, timeout=60.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 60000")
     return conn
 
 
