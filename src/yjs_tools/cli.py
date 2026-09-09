@@ -125,18 +125,21 @@ def search(
     """本机检索期刊。"""
     conn = _db(db)
     try:
-        items = search_journals(
+        page = search_journals(
             conn,
             query,
             limit=limit,
             jcr_quartile=jcr,
             cas_quartile=cas,
             year=year,
+            resolve_remote=True,
         )
-        if not items:
+        if not page.journals:
             typer.echo("没有匹配的期刊。先运行 xuankan ingest，或放宽筛选。")
             raise typer.Exit(code=1)
-        for j in items:
+        if page.hint:
+            typer.echo(page.hint)
+        for j in page.journals:
             issn = j.issn_l or "-"
             official = "-"
             if j.official:
@@ -148,8 +151,10 @@ def search(
                 if j.official.cas_quartile:
                     bits.append(f"中科院{j.official.cas_quartile}区")
                 official = " ".join(bits)
+            matched = "；".join(t.topic_name for t in j.matched_topics[:3])
+            extra = f"\t命中 {matched}" if matched else ""
             typer.echo(
-                f"{j.display_name}\t{issn}\t被引 {j.cited_by_count}\t{official}"
+                f"{j.display_name}\t{issn}\t被引 {j.cited_by_count}\t{official}{extra}"
             )
     finally:
         conn.close()

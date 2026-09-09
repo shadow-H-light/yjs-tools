@@ -5,9 +5,21 @@ import re
 import sqlite3
 
 from yjs_tools.journal.issn import looks_like_issn, normalize_issn
+from yjs_tools.journal.match import (
+    expand_query,
+    looks_like_direction,
+    local_topic_hits,
+    match_mode_for,
+    merge_hits,
+    quality_bonus,
+    remote_topic_ids,
+    topic_hits_by_ids,
+)
 from yjs_tools.journal.models import Journal, OfficialMetrics, Topic
+from yjs_tools.journal.result import ScoredHit, SearchPage
 
 FTS_SAFE = re.compile(r"[^\w\u4e00-\u9fff]+", re.UNICODE)
+TOPIC_HINT = "当前是主题匹配，未启用向量模型。命中主题会标在每条结果上。"
 
 
 def stats(conn: sqlite3.Connection) -> dict:
@@ -32,6 +44,7 @@ def stats(conn: sqlite3.Connection) -> dict:
         "import_batches": batch_count,
         "metric_years": years,
         "has_official_metrics": batch_count > 0,
+        "embedding_enabled": False,
     }
 
 
@@ -44,11 +57,13 @@ def search_journals(
     cas_quartile: int | None = None,
     year: int | None = None,
     warning: bool | None = None,
-) -> list[Journal]:
+    resolve_remote: bool = False,
+) -> SearchPage:
     limit = max(1, min(limit, 100))
     q = query.strip()
     join_sql, join_params = _metrics_join(year)
     filter_sql, filter_params = _metrics_where(jcr_quartile, cas_quartile, warning)
+    extra_and = filter_sql.replace("WHERE", "AND", 1) if filter_sql else ""
 
     if not q:
         sql = f"""
@@ -59,7 +74,8 @@ def search_journals(
             LIMIT ?
         """
         rows = conn.execute(sql, [*join_params, *filter_params, limit]).fetchall()
-        return [_hydrate(conn, row, year) for row in rows]
+        journals = [_hydrate(conn, row, year) for row in rows]
+        return SearchPage(journals=journals, match_mode="browse")
 
     compact = q.replace(" ", "")
     issn = normalize_issn(compact) if looks_like_issn(compact) else None
@@ -68,54 +84,55 @@ def search_journals(
             SELECT journals.* FROM journals
             {join_sql}
             WHERE (journals.issn_l = ? OR journals.issns LIKE ?)
-            {filter_sql.replace("WHERE", "AND", 1) if filter_sql else ""}
+            {extra_and}
             ORDER BY journals.cited_by_count DESC
             LIMIT ?
         """
         rows = conn.execute(
             sql, [*join_params, issn, f"%{issn}%", *filter_params, limit]
         ).fetchall()
-        if rows:
-            return [_hydrate(conn, row, year) for row in rows]
+        journals = [_hydrate(conn, row, year) for row in rows]
+        return SearchPage(journals=journals, match_mode="issn")
 
-    fts = _fts_query(q)
-    if fts:
-        sql = f"""
-            SELECT journals.* FROM journals
-            JOIN journals_fts ON journals.id = journals_fts.rowid
-            {join_sql}
-            WHERE journals_fts MATCH ?
-            {filter_sql.replace("WHERE", "AND", 1) if filter_sql else ""}
-            ORDER BY journals.cited_by_count DESC
-            LIMIT ?
-        """
-        rows = conn.execute(sql, [*join_params, fts, *filter_params, limit]).fetchall()
-        if rows:
-            return [_hydrate(conn, row, year) for row in rows]
-
-    like = f"%{q}%"
-    extra_and = filter_sql.replace("WHERE", "AND", 1) if filter_sql else ""
-    sql = f"""
-        SELECT journals.* FROM journals
-        {join_sql}
-        WHERE (
-            journals.display_name LIKE ? COLLATE NOCASE
-            OR journals.publisher LIKE ? COLLATE NOCASE
-            OR journals.issn_l LIKE ?
-            OR EXISTS (
-                SELECT 1 FROM journal_topics t
-                WHERE t.journal_id = journals.id
-                  AND t.topic_name LIKE ? COLLATE NOCASE
-            )
+    name_hits = _name_hits(conn, q)
+    topic_hits = local_topic_hits(conn, expand_query(q))
+    if resolve_remote and looks_like_direction(q):
+        remote_ids = remote_topic_ids(q)
+        topic_hits = merge_hits(topic_hits, topic_hits_by_ids(conn, remote_ids))
+    merged = merge_hits(name_hits, topic_hits)
+    if not merged:
+        return SearchPage(
+            journals=[],
+            match_mode="none",
+            hint=TOPIC_HINT,
         )
-        {extra_and}
-        ORDER BY journals.cited_by_count DESC
-        LIMIT ?
-    """
-    rows = conn.execute(
-        sql, [*join_params, like, like, like, like, *filter_params, limit]
-    ).fetchall()
-    return [_hydrate(conn, row, year) for row in rows]
+
+    allowed = _allowed_journal_ids(
+        conn, join_sql, join_params, extra_and, filter_params
+    )
+    if allowed is not None:
+        merged = {jid: hit for jid, hit in merged.items() if jid in allowed}
+    ranked = sorted(
+        merged.values(),
+        key=lambda hit: (
+            hit.total + quality_bonus(_citation(conn, hit.journal_id)),
+            _citation(conn, hit.journal_id),
+        ),
+        reverse=True,
+    )[:limit]
+
+    journals = []
+    for hit in ranked:
+        journal = get_journal(conn, hit.journal_id, year=year)
+        if journal is None:
+            continue
+        journal.match_score = round(hit.total, 3)
+        journal.matched_topics = hit.matched_topics[:6]
+        journals.append(journal)
+
+    mode = match_mode_for(merged)
+    hint = TOPIC_HINT if mode in {"topic", "mixed"} else None
+    return SearchPage(journals=journals, match_mode=mode, hint=hint)
 
 
 def get_journal(
@@ -129,6 +146,74 @@ def get_journal(
     if row is None:
         return None
     return _hydrate(conn, row, year)
+
+
+def _name_hits(conn: sqlite3.Connection, query: str) -> dict[int, ScoredHit]:
+    hits: dict[int, ScoredHit] = {}
+    fts = _fts_query(query)
+    rows = []
+    if fts:
+        rows = conn.execute(
+            """
+            SELECT j.id, j.display_name, j.cited_by_count
+            FROM journals_fts
+            JOIN journals j ON j.id = journals_fts.rowid
+            WHERE journals_fts MATCH ?
+            """,
+            (fts,),
+        ).fetchall()
+    if not rows:
+        like = f"%{query}%"
+        rows = conn.execute(
+            """
+            SELECT id, display_name, cited_by_count FROM journals
+            WHERE display_name LIKE ? COLLATE NOCASE
+               OR publisher LIKE ? COLLATE NOCASE
+            """,
+            (like, like),
+        ).fetchall()
+    q_low = query.lower()
+    for row in rows:
+        score = 2.0
+        name = (row["display_name"] or "").lower()
+        if name == q_low:
+            score = 8.0
+        elif name.startswith(q_low):
+            score = 5.0
+        hits[row["id"]] = ScoredHit(journal_id=row["id"], name_score=score)
+    return hits
+
+
+def _allowed_journal_ids(
+    conn: sqlite3.Connection,
+    join_sql: str,
+    join_params: list,
+    extra_and: str,
+    filter_params: list,
+) -> set[int] | None:
+    if not extra_and and not filter_params:
+        return None
+    sql = f"""
+        SELECT journals.id FROM journals
+        {join_sql}
+        {extra_and.replace("AND", "WHERE", 1) if extra_and.startswith("AND") else extra_and}
+    """
+    # extra_and is "AND m.jcr..." when filters exist; convert to WHERE
+    if extra_and:
+        sql = f"""
+            SELECT journals.id FROM journals
+            {join_sql}
+            WHERE {extra_and.removeprefix("AND ").strip()}
+        """
+    rows = conn.execute(sql, [*join_params, *filter_params]).fetchall()
+    return {row[0] for row in rows}
+
+
+def _citation(conn: sqlite3.Connection, journal_id: int) -> int:
+    row = conn.execute(
+        "SELECT cited_by_count FROM journals WHERE id = ?", (journal_id,)
+    ).fetchone()
+    return int(row[0]) if row else 0
 
 
 def _metrics_join(year: int | None) -> tuple[str, list]:

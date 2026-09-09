@@ -80,7 +80,7 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         year: int | None = Query(default=None, ge=1900, le=2100),
         warning: bool | None = Query(default=None),
     ):
-        items = search_journals(
+        page = search_journals(
             db(),
             q,
             limit=limit,
@@ -88,8 +88,9 @@ def create_app(db_path: Path | None = None) -> FastAPI:
             cas_quartile=cas,
             year=year,
             warning=warning,
+            resolve_remote=True,
         )
-        return {"query": q, "count": len(items), "results": [j.to_dict() for j in items]}
+        return page.to_dict(q)
 
     @app.get("/api/journals/{journal_id}")
     def api_detail(

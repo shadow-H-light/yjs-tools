@@ -58,7 +58,7 @@ CSV = """issn,year,jcr_quartile,impact_factor,cas_quartile,warning
 
 def test_import_filter_and_delete():
     conn = _conn()
-    before = search_journals(conn, "nature")
+    before = search_journals(conn, "nature").journals
     assert before[0].official is None
 
     result = import_metrics_csv(
@@ -70,21 +70,21 @@ def test_import_filter_and_delete():
     assert result["matched"] == 2
     assert result["unmatched"] == 1
 
-    nature = search_journals(conn, "nature")[0]
+    nature = search_journals(conn, "nature").journals[0]
     assert nature.official is not None
     assert nature.official.jcr_quartile == 1
     assert nature.official.impact_factor == 50.5
     assert nature.official.cas_quartile == 1
     assert nature.official.filename == "sample.csv"
 
-    q1 = search_journals(conn, jcr_quartile=1)
+    q1 = search_journals(conn, jcr_quartile=1).journals
     assert [j.display_name for j in q1] == ["Nature"]
 
-    cas3 = search_journals(conn, cas_quartile=3)
+    cas3 = search_journals(conn, cas_quartile=3).journals
     assert [j.display_name for j in cas3] == ["IEEE Access"]
 
     batches = list_batches(conn)
     assert len(batches) == 1
     assert delete_batch(conn, batches[0]["id"]) is True
-    assert search_journals(conn, "nature")[0].official is None
-    assert search_journals(conn, jcr_quartile=1) == []
+    assert search_journals(conn, "nature").journals[0].official is None
+    assert search_journals(conn, jcr_quartile=1).journals == []

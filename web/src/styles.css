@@ -133,6 +133,12 @@ article a {
   font-size: 13px;
 }
 
+.matched {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #3f4a38;
+}
+
 .official span:last-child {
   color: #7a7468;
 }

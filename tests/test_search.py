@@ -70,21 +70,21 @@ def test_search_by_name_and_issn():
     )
     conn.commit()
 
-    by_name = search_journals(conn, "nature")
+    by_name = search_journals(conn, "nature").journals
     assert [j.display_name for j in by_name] == ["Nature"]
     assert by_name[0].issn_l == "0028-0836"
     assert by_name[0].topics[0].topic_name == "Multidisciplinary"
 
-    by_issn = search_journals(conn, "0028-0836")
+    by_issn = search_journals(conn, "0028-0836").journals
     assert by_issn[0].display_name == "Nature"
 
-    by_issn_compact = search_journals(conn, "00280836")
+    by_issn_compact = search_journals(conn, "00280836").journals
     assert by_issn_compact[0].display_name == "Nature"
 
-    by_token = search_journals(conn, "pattern analysis")
+    by_token = search_journals(conn, "pattern analysis").journals
     assert "IEEE" in by_token[0].display_name
 
-    empty = search_journals(conn, "")
+    empty = search_journals(conn, "").journals
     assert empty[0].display_name == "Nature"
 
     detail = get_journal(conn, by_name[0].id)
@@ -101,6 +101,6 @@ def test_ingest_fixture_roundtrip(tmp_path: Path):
         _upsert_source(conn, source)
     conn.commit()
 
-    hits = search_journals(conn, "science")
+    hits = search_journals(conn, "science").journals
     names = {j.display_name.lower() for j in hits}
     assert any("science" in name for name in names)

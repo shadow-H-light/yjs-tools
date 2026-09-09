@@ -52,6 +52,8 @@ class Journal:
     type: str | None
     topics: list[Topic] = field(default_factory=list)
     official: OfficialMetrics | None = None
+    matched_topics: list[Topic] = field(default_factory=list)
+    match_score: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -68,6 +70,7 @@ class Journal:
             "citedness_2yr": self.citedness_2yr,
             "country_code": self.country_code,
             "type": self.type,
+            "match_score": self.match_score,
             "topics": [
                 {
                     "topic_id": t.topic_id,
@@ -76,6 +79,15 @@ class Journal:
                     "share": t.share,
                 }
                 for t in self.topics
+            ],
+            "matched_topics": [
+                {
+                    "topic_id": t.topic_id,
+                    "topic_name": t.topic_name,
+                    "field_name": t.field_name,
+                    "share": t.share,
+                }
+                for t in self.matched_topics
             ],
             "official": self.official.to_dict() if self.official else None,
         }

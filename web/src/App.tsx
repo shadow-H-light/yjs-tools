@@ -27,6 +27,7 @@ type Journal = {
   cited_by_count: number;
   citedness_2yr: number | null;
   topics: Topic[];
+  matched_topics: Topic[];
   official: Official | null;
 };
 
@@ -72,6 +73,7 @@ export default function App() {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [importYear, setImportYear] = useState("2025");
 
@@ -93,8 +95,13 @@ export default function App() {
 
   async function runSearch(q: string) {
     setError(null);
-    const data = await api<{ results: Journal[] }>(searchUrl(q));
+    const data = await api<{
+      results: Journal[];
+      hint: string | null;
+      match_mode: string;
+    }>(searchUrl(q));
     setResults(data.results);
+    setHint(data.hint);
   }
 
   useEffect(() => {
@@ -181,7 +188,7 @@ export default function App() {
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="刊名、ISSN 或主题，例如 Nature / 0028-0836"
+          placeholder="研究方向、刊名或 ISSN，例如 计算机视觉 / Nature"
         />
         <select
           value={jcr}
@@ -262,6 +269,7 @@ export default function App() {
           ))}
         </ul>
       )}
+      {hint && <p className="hint">{hint}</p>}
       {error && <p className="error">{error}</p>}
       {!error && results.length === 0 && (
         <p className="empty">没有结果。先同步 OpenAlex，或导入分区表后再筛选。</p>
@@ -309,6 +317,14 @@ export default function App() {
             </div>
           ) : (
             <p className="hint">官方分区/IF 未导入</p>
+          )}
+          {journal.matched_topics && journal.matched_topics.length > 0 && (
+            <p className="matched">
+              命中主题：
+              {journal.matched_topics
+                .map((topic) => topic.topic_name)
+                .join("、")}
+            </p>
           )}
           {journal.topics.length > 0 && (
             <ul className="topics">
