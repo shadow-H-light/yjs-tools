@@ -91,11 +91,15 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     @app.get("/api/journals")
     def api_search(
         q: str = Query(default=""),
-        limit: int = Query(default=20, ge=1, le=100),
+        limit: int = Query(default=10, ge=1, le=100),
         jcr: int | None = Query(default=None, ge=1, le=4),
         cas: int | None = Query(default=None, ge=1, le=4),
         year: int | None = Query(default=None, ge=1900, le=2100),
         warning: bool | None = Query(default=None),
+        by: str = Query(default="auto"),
+        region: str = Query(default="all"),
+        sort: str = Query(default="relevance"),
+        offset: int = Query(default=0, ge=0),
     ):
         page = search_journals(
             db(),
@@ -106,6 +110,10 @@ def create_app(db_path: Path | None = None) -> FastAPI:
             year=year,
             warning=warning,
             resolve_remote=True,
+            by=by,
+            region=region,
+            sort=sort,
+            offset=offset,
         )
         return page.to_dict(q)
 
@@ -138,6 +146,8 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         cas: int | None = Query(default=None, ge=1, le=4),
         year: int | None = Query(default=None, ge=1900, le=2100),
         ids: str | None = Query(default=None),
+        by: str = Query(default="auto"),
+        region: str = Query(default="all"),
     ):
         try:
             if ids:
@@ -151,6 +161,8 @@ def create_app(db_path: Path | None = None) -> FastAPI:
                     cas_quartile=cas,
                     year=year,
                     resolve_remote=True,
+                    by=by,
+                    region=region,
                 ).journals
         except (CompareError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -165,8 +177,9 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     def api_ingest(
         limit: int = Query(default=200, ge=1, le=500),
         query: str | None = Query(default=None),
+        scope: str = Query(default="all"),
     ):
-        result = ingest_openalex(db(), limit=limit, query=query)
+        result = ingest_openalex(db(), limit=limit, query=query, scope=scope)
         return {**result, "stats": stats(db())}
 
     @app.get("/api/imports")

@@ -21,10 +21,28 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
+    _migrate_existing_columns(conn)
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-    columns = {
-        row[1] for row in conn.execute("PRAGMA table_info(journal_metrics)")
-    }
-    if "review_days" not in columns:
-        conn.execute("ALTER TABLE journal_metrics ADD COLUMN review_days INTEGER")
+    _migrate_existing_columns(conn)
     conn.commit()
+
+
+def _migrate_existing_columns(conn: sqlite3.Connection) -> None:
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    if "journal_metrics" in tables:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(journal_metrics)")}
+        if "review_days" not in columns:
+            conn.execute("ALTER TABLE journal_metrics ADD COLUMN review_days INTEGER")
+    if "journals" in tables:
+        journal_cols = {row[1] for row in conn.execute("PRAGMA table_info(journals)")}
+        if "alternate_titles" not in journal_cols:
+            conn.execute("ALTER TABLE journals ADD COLUMN alternate_titles TEXT")
+        if "is_chinese" not in journal_cols:
+            conn.execute(
+                "ALTER TABLE journals ADD COLUMN is_chinese INTEGER NOT NULL DEFAULT 0"
+            )

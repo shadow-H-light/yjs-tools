@@ -49,11 +49,12 @@ uv run xuankan import examples/metrics-sample-2025.csv --year 2025 --source samp
 
 ## 关键词如何落到期刊
 
-召回三条路，合并去重后再过滤、排序。
+召回可按类型收窄。默认「智能」会识别 ISSN、中英文主题词和刊名。
 
-1. **刊名**：全文 + 三元组，覆盖 ISSN、缩写、常见拼写误差。
-2. **主题**：关键词映射到 OpenAlex Topic，取该主题下的刊。
-3. **语义（可选）**：对 aims/scope 做向量检索。本机没装 embedding 时跳过，只走 1、2。
+1. **刊名**：刊名、出版社、OpenAlex 别名（含中文刊英文译名）。
+2. **主题**：关键词映射到 OpenAlex Topic。中文方向词会展开为英文主题（如「传感器」→ sensor / sensors / sensing）；单词如 sensor 也会做主题召回。
+3. **ISSN**：规范化后精确匹配。
+4. **语义（可选）**：对 aims/scope 做向量检索。本机没装 embedding 时跳过。
 
 排序：
 
@@ -65,7 +66,7 @@ uv run xuankan import examples/metrics-sample-2025.csv --year 2025 --source samp
 
 SQLite 一张库。语义如下。
 
-- `journals`：身份、ISSN、出版社、主页、OA
+- `journals`：身份、ISSN、别名、出版社、主页、OA、是否中文刊
 - `journal_topics`：期刊与主题多对多
 - `journal_metrics`：按年份存 IF、分区、引用
 - `journal_scope`：范围文本；embedding 列可空
@@ -80,3 +81,4 @@ SQLite 一张库。语义如下。
 | 2026-09-09 | 改为本机 SQLite；同步由用户触发；向量可关。 |
 | 2026-09-09 | 补充 CSV 列名与样例导入命令。 |
 | 2026-09-09 | 增加审稿时长列；缺值导出为「暂无」。 |
+| 2026-09-09 | 中文刊：OpenAlex `country_code:cn` + 中文刊名/别名；主题检索中英对照。 |

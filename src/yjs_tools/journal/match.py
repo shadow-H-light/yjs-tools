@@ -1,82 +1,34 @@
 from __future__ import annotations
 
 import math
-import re
 import sqlite3
 
 import httpx
 
 from yjs_tools.journal.ingest import USER_AGENT
+from yjs_tools.journal.lexicon import (
+    QueryExpansion,
+    expand_query,
+    looks_like_journal_title,
+    should_resolve_remote,
+)
 from yjs_tools.journal.models import Topic
 from yjs_tools.journal.result import ScoredHit
 
 OPENALEX_TOPICS = "https://api.openalex.org/topics"
-STOPWORDS = {
-    "a",
-    "an",
-    "and",
-    "for",
-    "in",
-    "of",
-    "on",
-    "the",
-    "to",
-    "with",
-    "journal",
-    "international",
-    "research",
-    "的",
-    "与",
-    "及",
-    "和",
-    "中",
-}
-# 少量中英方向对照，方便在没有向量模型时用主题召回。
-SYNONYMS = {
-    "计算机视觉": "computer vision",
-    "机器学习": "machine learning",
-    "深度学习": "deep learning",
-    "自然语言": "natural language processing",
-    "自然语言处理": "natural language processing",
-    "太阳能电池": "solar cell",
-    "钙钛矿": "perovskite",
-    "固态电池": "solid state battery",
-    "计算社会科学": "computational social science",
-    "生物信息": "bioinformatics",
-    "材料科学": "materials science",
-}
 
-TOKEN_RE = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]+", re.IGNORECASE)
-
-
-def looks_like_direction(query: str) -> bool:
-    if any("\u4e00" <= ch <= "\u9fff" for ch in query):
-        return True
-    tokens = [
-        t
-        for t in TOKEN_RE.findall(query.lower())
-        if t not in STOPWORDS and len(t) >= 2
-    ]
-    return len(tokens) >= 2
-
-
-def expand_query(query: str) -> list[str]:
-    raw = query.strip()
-    phrases = [raw]
-    key = re.sub(r"\s+", "", raw.lower())
-    for zh, en in SYNONYMS.items():
-        if zh in raw or zh.replace(" ", "") == key:
-            phrases.append(en)
-    tokens: list[str] = []
-    seen: set[str] = set()
-    for phrase in phrases:
-        for token in TOKEN_RE.findall(phrase.lower()):
-            if token in STOPWORDS or len(token) < 2:
-                continue
-            if token not in seen:
-                seen.add(token)
-                tokens.append(token)
-    return tokens or [raw.lower()]
+__all__ = [
+    "QueryExpansion",
+    "expand_query",
+    "local_topic_hits",
+    "looks_like_journal_title",
+    "match_mode_for",
+    "merge_hits",
+    "quality_bonus",
+    "remote_topic_ids",
+    "should_resolve_remote",
+    "topic_hits_by_ids",
+]
 
 
 def local_topic_hits(conn: sqlite3.Connection, tokens: list[str]) -> dict[int, ScoredHit]:
@@ -109,23 +61,33 @@ def local_topic_hits(conn: sqlite3.Connection, tokens: list[str]) -> dict[int, S
     return hits
 
 
-def remote_topic_ids(query: str, timeout: float = 8.0) -> list[str]:
-    try:
-        response = httpx.get(
-            OPENALEX_TOPICS,
-            params={"search": query, "per_page": 8},
-            headers={"User-Agent": USER_AGENT},
-            timeout=timeout,
-        )
-        response.raise_for_status()
-    except httpx.HTTPError:
-        return []
+def remote_topic_ids(
+    queries: str | list[str],
+    timeout: float = 8.0,
+) -> list[str]:
+    phrases = [queries] if isinstance(queries, str) else list(queries)
     ids: list[str] = []
-    for item in response.json().get("results") or []:
-        raw = item.get("id") or ""
-        topic_id = raw.rsplit("/", 1)[-1]
-        if topic_id:
-            ids.append(topic_id)
+    seen: set[str] = set()
+    for phrase in phrases[:3]:
+        text = (phrase or "").strip()
+        if not text:
+            continue
+        try:
+            response = httpx.get(
+                OPENALEX_TOPICS,
+                params={"search": text, "per_page": 8},
+                headers={"User-Agent": USER_AGENT},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError:
+            continue
+        for item in response.json().get("results") or []:
+            raw = item.get("id") or ""
+            topic_id = raw.rsplit("/", 1)[-1]
+            if topic_id and topic_id not in seen:
+                seen.add(topic_id)
+                ids.append(topic_id)
     return ids
 
 

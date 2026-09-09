@@ -87,10 +87,46 @@ def test_search_by_name_and_issn():
     empty = search_journals(conn, "").journals
     assert empty[0].display_name == "Nature"
 
+    first = search_journals(conn, "", limit=1, offset=0)
+    second = search_journals(conn, "", limit=1, offset=1)
+    assert first.total == 2
+    assert second.total == 2
+    assert first.journals[0].id != second.journals[0].id
+
     detail = get_journal(conn, by_name[0].id)
     assert detail is not None
     assert detail.publisher == "Springer Nature"
     assert stats(conn)["journals"] == 2
+
+
+def test_chinese_journal_name_and_region():
+    conn = _conn()
+    _upsert_source(
+        conn,
+        _source(
+            id="https://openalex.org/S888",
+            display_name="光学学报",
+            issn_l="0253-2239",
+            issn=["0253-2239"],
+            host_organization_name="中国光学学会",
+            country_code="CN",
+            cited_by_count=1200,
+            alternate_titles=["Acta Optica Sinica"],
+            topics=[],
+        ),
+    )
+    conn.commit()
+    by_name = search_journals(conn, "光学学报", by="name").journals
+    assert by_name[0].display_name == "光学学报"
+    assert by_name[0].is_chinese is True
+
+    by_alias = search_journals(conn, "Acta Optica", by="name").journals
+    assert by_alias[0].display_name == "光学学报"
+
+    only_cn = search_journals(conn, "", region="cn").journals
+    assert [j.display_name for j in only_cn] == ["光学学报"]
+    only_intl = search_journals(conn, "", region="intl").journals
+    assert all(not j.is_chinese for j in only_intl)
 
 
 def test_ingest_fixture_roundtrip(tmp_path: Path):

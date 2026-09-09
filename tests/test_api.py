@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import sqlite3
+
 from fastapi.testclient import TestClient
 
 from yjs_tools.api import create_app
@@ -50,3 +52,34 @@ def test_search_api(tmp_path: Path):
         assert body["count"] == 1
         assert body["results"][0]["display_name"] == "Nature"
         assert body["results"][0]["issn_l"] == "0028-0836"
+
+
+def test_init_db_migrates_is_chinese(tmp_path: Path):
+    db_path = tmp_path / "legacy.sqlite"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE journals (
+            id INTEGER PRIMARY KEY,
+            openalex_id TEXT NOT NULL UNIQUE,
+            display_name TEXT NOT NULL,
+            issn_l TEXT,
+            issns TEXT,
+            publisher TEXT,
+            homepage TEXT,
+            is_oa INTEGER NOT NULL DEFAULT 0,
+            works_count INTEGER NOT NULL DEFAULT 0,
+            cited_by_count INTEGER NOT NULL DEFAULT 0,
+            citedness_2yr REAL,
+            country_code TEXT,
+            type TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    init_db(conn)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(journals)")}
+    assert "is_chinese" in columns
+    assert "alternate_titles" in columns
+    conn.close()

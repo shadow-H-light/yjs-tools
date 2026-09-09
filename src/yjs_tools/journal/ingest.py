@@ -8,6 +8,8 @@ from urllib.parse import urlencode
 
 import httpx
 
+from yjs_tools.journal.lexicon import CJK_RE
+
 OPENALEX_SOURCES = "https://api.openalex.org/sources"
 USER_AGENT = (
     "yjs-tools/xuankan "
@@ -23,7 +25,16 @@ SEED_QUERIES = (
     "Physical Review",
     "ACS",
     "Springer",
+    "Sensors",
 )
+CHINESE_SEED_QUERIES = (
+    "学报",
+    "中华",
+    "中国科学",
+    "Chinese Journal",
+)
+CHINESE_COUNTRIES = {"CN", "TW", "HK", "MO"}
+SCOPES = {"all", "cn", "intl"}
 
 
 def ingest_openalex(
@@ -31,9 +42,12 @@ def ingest_openalex(
     *,
     limit: int = 200,
     query: str | None = None,
+    scope: str = "all",
+    name_search: bool = False,
     client: httpx.Client | None = None,
 ) -> dict[str, int]:
     limit = max(1, min(limit, 2000))
+    scope = scope if scope in SCOPES else "all"
     own_client = client is None
     client = client or httpx.Client(timeout=30.0, headers={"User-Agent": USER_AGENT})
     inserted = 0
@@ -41,13 +55,18 @@ def ingest_openalex(
     seen: set[str] = set()
 
     try:
-        queries = [query] if query else list(SEED_QUERIES)
-        per_query = limit if query else max(8, limit // len(queries))
-        for q in queries:
+        jobs = _ingest_jobs(limit, query, scope, name_search=name_search)
+        for job in jobs:
             if inserted + updated >= limit:
                 break
-            remaining = min(per_query, limit - inserted - updated)
-            batch = _fetch_sources(client, query=q, limit=remaining)
+            remaining = min(job["limit"], limit - inserted - updated)
+            batch = _fetch_sources(
+                client,
+                query=job["query"],
+                limit=remaining,
+                extra_filter=job["filter"],
+                name_search=bool(job.get("name_search")),
+            )
             for source in batch:
                 openalex_id = _short_id(source.get("id"))
                 if not openalex_id or openalex_id in seen:
@@ -72,7 +91,49 @@ def ingest_openalex(
         (datetime.now(timezone.utc).isoformat(timespec="seconds"),),
     )
     conn.commit()
-    return {"inserted": inserted, "updated": updated, "total": inserted + updated}
+    return {
+        "inserted": inserted,
+        "updated": updated,
+        "total": inserted + updated,
+        "scope": scope,
+    }
+
+
+def _ingest_jobs(
+    limit: int,
+    query: str | None,
+    scope: str,
+    name_search: bool = False,
+) -> list[dict]:
+    if query:
+        extra = "country_code:cn" if scope == "cn" else None
+        return [
+            {
+                "query": query,
+                "filter": extra,
+                "limit": limit,
+                "name_search": name_search,
+            }
+        ]
+    jobs: list[dict] = []
+    if scope in {"all", "intl"}:
+        intl_limit = limit if scope == "intl" else max(8, (limit * 2) // 3)
+        per = max(8, intl_limit // len(SEED_QUERIES))
+        for q in SEED_QUERIES:
+            jobs.append({"query": q, "filter": None, "limit": per})
+    if scope in {"all", "cn"}:
+        cn_budget = limit if scope == "cn" else max(20, limit // 3)
+        jobs.append(
+            {
+                "query": None,
+                "filter": "country_code:cn",
+                "limit": max(12, cn_budget // 2),
+            }
+        )
+        per = max(6, (cn_budget // 2) // len(CHINESE_SEED_QUERIES))
+        for q in CHINESE_SEED_QUERIES:
+            jobs.append({"query": q, "filter": "country_code:cn", "limit": per})
+    return jobs
 
 
 def _fetch_sources(
@@ -80,17 +141,24 @@ def _fetch_sources(
     *,
     query: str | None,
     limit: int,
+    extra_filter: str | None = None,
+    name_search: bool = False,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     cursor = "*"
+    source_filter = "type:journal,has_issn:true"
+    if extra_filter:
+        source_filter = f"{source_filter},{extra_filter}"
+    if query and name_search:
+        source_filter = f"{source_filter},display_name.search:{query}"
     while len(results) < limit and cursor:
         params: dict[str, str] = {
-            "filter": "type:journal,has_issn:true",
+            "filter": source_filter,
             "per_page": str(min(50, limit - len(results))),
             "cursor": cursor,
             "sort": "cited_by_count:desc",
         }
-        if query:
+        if query and not name_search:
             params["search"] = query
         url = f"{OPENALEX_SOURCES}?{urlencode(params)}"
         response = client.get(url)
@@ -114,6 +182,8 @@ def _upsert_source(conn: sqlite3.Connection, source: dict[str, Any]) -> bool:
     issn_l = source.get("issn_l") or (issns[0] if issns else None)
     stats = source.get("summary_stats") or {}
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    titles = [t for t in (source.get("alternate_titles") or []) if t]
+    is_chinese = 1 if _is_chinese_journal(source, display_name, titles) else 0
 
     existing = conn.execute(
         "SELECT id FROM journals WHERE openalex_id = ?", (openalex_id,)
@@ -123,6 +193,7 @@ def _upsert_source(conn: sqlite3.Connection, source: dict[str, Any]) -> bool:
         display_name,
         issn_l,
         json.dumps(issns, ensure_ascii=False),
+        json.dumps(titles, ensure_ascii=False),
         source.get("host_organization_name") or source.get("publisher"),
         source.get("homepage_url"),
         1 if source.get("is_oa") else 0,
@@ -131,6 +202,7 @@ def _upsert_source(conn: sqlite3.Connection, source: dict[str, Any]) -> bool:
         stats.get("2yr_mean_citedness"),
         source.get("country_code"),
         source.get("type"),
+        is_chinese,
         now,
         openalex_id,
     )
@@ -140,9 +212,10 @@ def _upsert_source(conn: sqlite3.Connection, source: dict[str, Any]) -> bool:
         conn.execute(
             """
             UPDATE journals SET
-                display_name = ?, issn_l = ?, issns = ?, publisher = ?,
-                homepage = ?, is_oa = ?, works_count = ?, cited_by_count = ?,
-                citedness_2yr = ?, country_code = ?, type = ?, updated_at = ?
+                display_name = ?, issn_l = ?, issns = ?, alternate_titles = ?,
+                publisher = ?, homepage = ?, is_oa = ?, works_count = ?,
+                cited_by_count = ?, citedness_2yr = ?, country_code = ?,
+                type = ?, is_chinese = ?, updated_at = ?
             WHERE openalex_id = ?
             """,
             values,
@@ -151,10 +224,10 @@ def _upsert_source(conn: sqlite3.Connection, source: dict[str, Any]) -> bool:
         cursor = conn.execute(
             """
             INSERT INTO journals (
-                display_name, issn_l, issns, publisher, homepage, is_oa,
-                works_count, cited_by_count, citedness_2yr, country_code,
-                type, updated_at, openalex_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                display_name, issn_l, issns, alternate_titles, publisher, homepage,
+                is_oa, works_count, cited_by_count, citedness_2yr, country_code,
+                type, is_chinese, updated_at, openalex_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             values,
         )
@@ -182,6 +255,15 @@ def _upsert_source(conn: sqlite3.Connection, source: dict[str, Any]) -> bool:
             ),
         )
     return existing is None
+
+
+def _is_chinese_journal(source: dict[str, Any], display_name: str, titles: list[str]) -> bool:
+    code = (source.get("country_code") or "").upper()
+    if code in CHINESE_COUNTRIES:
+        return True
+    publisher = source.get("host_organization_name") or source.get("publisher") or ""
+    blob = " ".join([display_name, publisher, *titles])
+    return bool(CJK_RE.search(blob))
 
 
 def _short_id(value: str | None) -> str:

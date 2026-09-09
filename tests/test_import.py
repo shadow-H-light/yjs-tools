@@ -85,6 +85,9 @@ def test_import_filter_and_delete():
     q1 = search_journals(conn, jcr_quartile=1).journals
     assert [j.display_name for j in q1] == ["Nature"]
 
+    by_if = search_journals(conn, "", sort="impact_factor").journals
+    assert by_if[0].display_name == "Nature"
+
     cas3 = search_journals(conn, cas_quartile=3).journals
     assert [j.display_name for j in cas3] == ["IEEE Access"]
 

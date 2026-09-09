@@ -84,18 +84,21 @@ def serve(
 def ingest(
     limit: int = 200,
     query: Optional[str] = None,
+    scope: str = "all",
     db: Path = DEFAULT_DB_PATH,
 ) -> None:
-    """从 OpenAlex 同步国际刊到本机 SQLite。"""
+    """从 OpenAlex 同步期刊。scope=all 含中文刊，intl 仅国际刊，cn 仅中文刊。"""
     conn = _db(db)
     try:
-        result = ingest_openalex(conn, limit=limit, query=query)
+        result = ingest_openalex(conn, limit=limit, query=query, scope=scope)
         typer.echo(
-            f"同步完成：新增 {result['inserted']}，更新 {result['updated']}，"
-            f"合计 {result['total']}"
+            f"同步完成（{result.get('scope', scope)}）：新增 {result['inserted']}，"
+            f"更新 {result['updated']}，合计 {result['total']}"
         )
         s = stats(conn)
-        typer.echo(f"库中现有期刊 {s['journals']} 种")
+        typer.echo(
+            f"库中现有期刊 {s['journals']} 种，其中中文刊 {s.get('chinese_journals', 0)} 种"
+        )
     except (httpx.HTTPError, OSError, sqlite3.OperationalError) as exc:
         _fail(exc)
     finally:
@@ -160,12 +163,15 @@ def import_delete(batch_id: int, db: Path = DEFAULT_DB_PATH) -> None:
 def search(
     query: str = typer.Argument(default=""),
     limit: int = 10,
+    by: str = "auto",
+    region: str = "all",
+    sort: str = "relevance",
     jcr: Optional[int] = None,
     cas: Optional[int] = None,
     year: Optional[int] = None,
     db: Path = DEFAULT_DB_PATH,
 ) -> None:
-    """本机检索期刊。"""
+    """本机检索期刊。by=auto/name/topic/issn；region=all/cn/intl。"""
     conn = _db(db)
     try:
         page = search_journals(
@@ -176,6 +182,9 @@ def search(
             cas_quartile=cas,
             year=year,
             resolve_remote=True,
+            by=by,
+            region=region,
+            sort=sort,
         )
         if not page.journals:
             typer.echo("没有匹配的期刊。先运行 xuankan ingest，或放宽筛选。")
@@ -251,6 +260,8 @@ def export_cmd(
     query: str = "",
     out: Path = Path("xuankan-export.csv"),
     ids: Optional[str] = None,
+    by: str = "auto",
+    region: str = "all",
     jcr: Optional[int] = None,
     cas: Optional[int] = None,
     limit: int = 20,
@@ -269,6 +280,8 @@ def export_cmd(
                 jcr_quartile=jcr,
                 cas_quartile=cas,
                 resolve_remote=True,
+                by=by,
+                region=region,
             ).journals
         out.write_text(journals_to_csv(journals), encoding="utf-8")
         typer.echo(f"已写入 {out}（{len(journals)} 行）")
@@ -286,7 +299,8 @@ def stat(db: Path = DEFAULT_DB_PATH) -> None:
     try:
         s = stats(conn)
         typer.echo(
-            f"期刊 {s['journals']} · 主题 {s['topics']} · "
+            f"期刊 {s['journals']}（中文刊 {s.get('chinese_journals', 0)}）· "
+            f"主题 {s['topics']} · "
             f"导入批次 {s['import_batches']} · 上次同步 {s['last_ingest_at'] or '尚未同步'}"
         )
     finally:

@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS journals (
     display_name TEXT NOT NULL,
     issn_l TEXT,
     issns TEXT,
+    alternate_titles TEXT,
     publisher TEXT,
     homepage TEXT,
     is_oa INTEGER NOT NULL DEFAULT 0,
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS journals (
     citedness_2yr REAL,
     country_code TEXT,
     type TEXT,
+    is_chinese INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
 );
 
@@ -53,6 +55,7 @@ CREATE TABLE IF NOT EXISTS journal_metrics (
 );
 
 CREATE INDEX IF NOT EXISTS idx_journals_issn_l ON journals(issn_l);
+CREATE INDEX IF NOT EXISTS idx_journals_chinese ON journals(is_chinese);
 CREATE INDEX IF NOT EXISTS idx_journals_cited ON journals(cited_by_count DESC);
 CREATE INDEX IF NOT EXISTS idx_topics_name ON journal_topics(topic_name);
 CREATE INDEX IF NOT EXISTS idx_metrics_journal_year ON journal_metrics(journal_id, year);

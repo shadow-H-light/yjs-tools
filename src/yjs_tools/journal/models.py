@@ -52,6 +52,8 @@ class Journal:
     citedness_2yr: float | None
     country_code: str | None
     type: str | None
+    alternate_titles: list[str] = field(default_factory=list)
+    is_chinese: bool = False
     topics: list[Topic] = field(default_factory=list)
     official: OfficialMetrics | None = None
     matched_topics: list[Topic] = field(default_factory=list)
@@ -72,6 +74,8 @@ class Journal:
             "citedness_2yr": self.citedness_2yr,
             "country_code": self.country_code,
             "type": self.type,
+            "alternate_titles": self.alternate_titles,
+            "is_chinese": self.is_chinese,
             "match_score": self.match_score,
             "topics": [
                 {

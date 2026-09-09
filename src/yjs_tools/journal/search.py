@@ -4,10 +4,11 @@ import json
 import re
 import sqlite3
 
+import httpx
+
 from yjs_tools.journal.issn import looks_like_issn, normalize_issn
+from yjs_tools.journal.lexicon import backfill_queries, expand_query, should_resolve_remote
 from yjs_tools.journal.match import (
-    expand_query,
-    looks_like_direction,
     local_topic_hits,
     match_mode_for,
     merge_hits,
@@ -20,6 +21,11 @@ from yjs_tools.journal.result import ScoredHit, SearchPage
 
 FTS_SAFE = re.compile(r"[^\w\u4e00-\u9fff]+", re.UNICODE)
 TOPIC_HINT = "当前是主题匹配，未启用向量模型。命中主题会标在每条结果上。"
+SEARCH_BY = {"auto", "name", "topic", "issn"}
+REGIONS = {"all", "cn", "intl"}
+SORTS = {"relevance", "cited", "impact_factor", "review_days", "name"}
+BACKFILL_MIN_HITS = 5
+BACKFILL_LIMIT = 40
 
 
 def stats(conn: sqlite3.Connection) -> dict:
@@ -31,6 +37,12 @@ def stats(conn: sqlite3.Connection) -> dict:
         "SELECT value FROM meta WHERE key = 'last_ingest_at'"
     ).fetchone()
     batch_count = conn.execute("SELECT COUNT(*) FROM import_batches").fetchone()[0]
+    chinese_count = 0
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(journals)")}
+    if "is_chinese" in columns:
+        chinese_count = conn.execute(
+            "SELECT COUNT(*) FROM journals WHERE is_chinese = 1"
+        ).fetchone()[0]
     years = [
         row[0]
         for row in conn.execute(
@@ -40,6 +52,7 @@ def stats(conn: sqlite3.Connection) -> dict:
     return {
         "journals": journal_count,
         "topics": topic_count,
+        "chinese_journals": chinese_count,
         "last_ingest_at": last_ingest[0] if last_ingest else None,
         "import_batches": batch_count,
         "metric_years": years,
@@ -58,60 +71,111 @@ def search_journals(
     year: int | None = None,
     warning: bool | None = None,
     resolve_remote: bool = False,
+    by: str = "auto",
+    region: str = "all",
+    sort: str = "relevance",
+    offset: int = 0,
 ) -> SearchPage:
     limit = max(1, min(limit, 100))
+    offset = max(0, offset)
     q = query.strip()
+    by = by if by in SEARCH_BY else "auto"
+    region = region if region in REGIONS else "all"
+    sort = sort if sort in SORTS else "relevance"
     join_sql, join_params = _metrics_join(year)
     filter_sql, filter_params = _metrics_where(jcr_quartile, cas_quartile, warning)
+    region_sql, region_params = _region_where(region)
     extra_and = filter_sql.replace("WHERE", "AND", 1) if filter_sql else ""
+    extra_and = extra_and + region_sql
 
     if not q:
-        sql = f"""
-            SELECT journals.* FROM journals
-            {join_sql}
-            {filter_sql}
-            ORDER BY journals.cited_by_count DESC, journals.display_name
-            LIMIT ?
-        """
-        rows = conn.execute(sql, [*join_params, *filter_params, limit]).fetchall()
-        journals = [_hydrate(conn, row, year) for row in rows]
-        return SearchPage(journals=journals, match_mode="browse")
+        return _browse(
+            conn,
+            join_sql,
+            join_params,
+            extra_and,
+            [*filter_params, *region_params],
+            limit=limit,
+            offset=offset,
+            sort=sort,
+            year=year,
+            by=by,
+        )
 
+    expansion = expand_query(q)
     compact = q.replace(" ", "")
     issn = normalize_issn(compact) if looks_like_issn(compact) else None
-    if issn:
+    use_issn = by == "issn" or (by == "auto" and issn)
+    if use_issn:
+        if not issn:
+            return SearchPage(
+                journals=[],
+                match_mode="issn",
+                search_by="issn",
+                hint="ISSN 格式不正确，请输入如 0028-0836。",
+                total=0,
+            )
         sql = f"""
             SELECT journals.* FROM journals
             {join_sql}
             WHERE (journals.issn_l = ? OR journals.issns LIKE ?)
             {extra_and}
-            ORDER BY journals.cited_by_count DESC
-            LIMIT ?
+            ORDER BY {_sql_order(sort)}
+            LIMIT ? OFFSET ?
         """
+        count_sql = f"""
+            SELECT COUNT(*) FROM journals
+            {join_sql}
+            WHERE (journals.issn_l = ? OR journals.issns LIKE ?)
+            {extra_and}
+        """
+        count_params = [*join_params, issn, f"%{issn}%", *filter_params, *region_params]
+        total = conn.execute(count_sql, count_params).fetchone()[0]
         rows = conn.execute(
-            sql, [*join_params, issn, f"%{issn}%", *filter_params, limit]
+            sql, [*count_params, limit, offset]
         ).fetchall()
         journals = [_hydrate(conn, row, year) for row in rows]
-        return SearchPage(journals=journals, match_mode="issn")
+        return SearchPage(
+            journals=journals,
+            match_mode="issn",
+            search_by="issn",
+            total=int(total),
+        )
 
-    name_hits = _name_hits(conn, q)
-    topic_hits = local_topic_hits(conn, expand_query(q))
-    if resolve_remote and looks_like_direction(q):
-        remote_ids = remote_topic_ids(q)
-        topic_hits = merge_hits(topic_hits, topic_hits_by_ids(conn, remote_ids))
-    merged = merge_hits(name_hits, topic_hits)
+    merged = _gather_query_hits(conn, q, expansion, by, resolve_remote)
+    filled = 0
+    if (
+        resolve_remote
+        and (by == "topic" or should_resolve_remote(expansion, by))
+        and len(merged) < BACKFILL_MIN_HITS
+    ):
+        filled = _backfill_topic_sources(conn, expansion)
+        if filled:
+            merged = _gather_query_hits(conn, q, expansion, by, resolve_remote)
+
     if not merged:
+        hint = _compose_hint(expansion, by, empty=True, filled=filled)
         return SearchPage(
             journals=[],
             match_mode="none",
-            hint=TOPIC_HINT,
+            search_by=by,
+            query_language=expansion.language,
+            expanded_terms=expansion.english_terms or expansion.tokens[:4],
+            hint=hint,
+            total=0,
+            filled=filled,
         )
 
     allowed = _allowed_journal_ids(
-        conn, join_sql, join_params, extra_and, filter_params
+        conn,
+        join_sql,
+        join_params,
+        extra_and,
+        [*filter_params, *region_params],
     )
     if allowed is not None:
         merged = {jid: hit for jid, hit in merged.items() if jid in allowed}
+
     ranked = sorted(
         merged.values(),
         key=lambda hit: (
@@ -119,7 +183,7 @@ def search_journals(
             _citation(conn, hit.journal_id),
         ),
         reverse=True,
-    )[:limit]
+    )
 
     journals = []
     for hit in ranked:
@@ -130,9 +194,22 @@ def search_journals(
         journal.matched_topics = hit.matched_topics[:6]
         journals.append(journal)
 
-    mode = match_mode_for(merged)
-    hint = TOPIC_HINT if mode in {"topic", "mixed"} else None
-    return SearchPage(journals=journals, match_mode=mode, hint=hint)
+    if sort != "relevance":
+        journals = _sort_journals(journals, sort)
+    total = len(journals)
+    journals = journals[offset : offset + limit]
+    mode = match_mode_for(merged) if by == "auto" else by
+    hint = _compose_hint(expansion, by, empty=False, mode=mode, filled=filled)
+    return SearchPage(
+        journals=journals,
+        match_mode=mode,
+        search_by=by,
+        query_language=expansion.language,
+        expanded_terms=expansion.english_terms or expansion.tokens[:4],
+        hint=hint,
+        total=total,
+        filled=filled,
+    )
 
 
 def get_journal(
@@ -146,6 +223,160 @@ def get_journal(
     if row is None:
         return None
     return _hydrate(conn, row, year)
+
+
+def _compose_hint(
+    expansion,
+    by: str,
+    *,
+    empty: bool,
+    mode: str | None = None,
+    filled: int = 0,
+) -> str | None:
+    bits = []
+    if expansion.note:
+        bits.append(expansion.note)
+    if filled:
+        bits.append(f"已按英文主题从 OpenAlex 补入 {filled} 种期刊。")
+    if not empty and (by == "topic" or mode in {"topic", "mixed"}):
+        bits.append(TOPIC_HINT)
+    if empty:
+        bits.append(
+            "没有命中该主题。本机库里可能还没有相关刊；请确认能访问 OpenAlex 后重试检索。"
+        )
+    return " ".join(bits) if bits else None
+
+
+def _gather_query_hits(
+    conn: sqlite3.Connection,
+    raw: str,
+    expansion,
+    by: str,
+    resolve_remote: bool,
+) -> dict[int, ScoredHit]:
+    name_hits: dict[int, ScoredHit] = {}
+    topic_hits: dict[int, ScoredHit] = {}
+    if by in {"auto", "name", "topic"}:
+        name_hits = _name_hits(conn, raw)
+        for term in [*expansion.english_terms, *backfill_queries(expansion)]:
+            name_hits = merge_hits(name_hits, _name_hits(conn, term))
+        if by == "name":
+            return name_hits
+    if by in {"auto", "topic"}:
+        topic_hits = local_topic_hits(conn, expansion.tokens)
+        if resolve_remote and should_resolve_remote(expansion, by):
+            remote_ids = remote_topic_ids(expansion.remote_queries)
+            topic_hits = merge_hits(topic_hits, topic_hits_by_ids(conn, remote_ids))
+    if by == "topic":
+        return merge_hits(name_hits, topic_hits)
+    return merge_hits(name_hits, topic_hits)
+
+
+def _backfill_topic_sources(conn: sqlite3.Connection, expansion) -> int:
+    from yjs_tools.journal.ingest import ingest_openalex
+
+    queries = backfill_queries(expansion)
+    if not queries:
+        queries = [expansion.raw]
+    filled = 0
+    per = max(8, BACKFILL_LIMIT // max(1, len(queries)))
+    for query in queries:
+        try:
+            result = ingest_openalex(
+                conn,
+                limit=per,
+                query=query,
+                scope="all",
+                name_search=True,
+            )
+        except httpx.HTTPError:
+            try:
+                result = ingest_openalex(
+                    conn, limit=per, query=query, scope="all"
+                )
+            except httpx.HTTPError:
+                continue
+        filled += int(result.get("total") or 0)
+    return filled
+
+
+def _browse(
+    conn: sqlite3.Connection,
+    join_sql: str,
+    join_params: list,
+    extra_and: str,
+    filter_params: list,
+    *,
+    limit: int,
+    offset: int,
+    sort: str,
+    year: int | None,
+    by: str,
+) -> SearchPage:
+    where = _where_from_and(extra_and)
+    params = [*join_params, *filter_params]
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM journals {join_sql} {where}",
+        params,
+    ).fetchone()[0]
+    order = _sql_order("cited" if sort == "relevance" else sort)
+    rows = conn.execute(
+        f"""
+        SELECT journals.* FROM journals
+        {join_sql}
+        {where}
+        ORDER BY {order}
+        LIMIT ? OFFSET ?
+        """,
+        [*params, limit, offset],
+    ).fetchall()
+    journals = [_hydrate(conn, row, year) for row in rows]
+    return SearchPage(
+        journals=journals,
+        match_mode="browse",
+        search_by=by,
+        total=int(total),
+    )
+
+
+def _sql_order(sort: str) -> str:
+    if sort == "name":
+        return "journals.display_name COLLATE NOCASE"
+    if sort == "impact_factor":
+        return (
+            "m.impact_factor IS NULL, m.impact_factor DESC, "
+            "journals.cited_by_count DESC"
+        )
+    if sort == "review_days":
+        return (
+            "m.review_days IS NULL, m.review_days ASC, "
+            "journals.cited_by_count DESC"
+        )
+    return "journals.cited_by_count DESC, journals.display_name"
+
+
+def _sort_journals(journals: list[Journal], sort: str) -> list[Journal]:
+    if sort == "name":
+        return sorted(journals, key=lambda j: (j.display_name or "").lower())
+    if sort == "cited":
+        return sorted(journals, key=lambda j: (-j.cited_by_count, j.display_name.lower()))
+    if sort == "impact_factor":
+        return sorted(
+            journals,
+            key=lambda j: (
+                j.official is None or j.official.impact_factor is None,
+                -(j.official.impact_factor or 0) if j.official else 0,
+            ),
+        )
+    if sort == "review_days":
+        return sorted(
+            journals,
+            key=lambda j: (
+                j.official is None or j.official.review_days is None,
+                j.official.review_days if j.official and j.official.review_days is not None else 0,
+            ),
+        )
+    return journals
 
 
 def _name_hits(conn: sqlite3.Connection, query: str) -> dict[int, ScoredHit]:
@@ -162,9 +393,17 @@ def _name_hits(conn: sqlite3.Connection, query: str) -> dict[int, ScoredHit]:
             """,
             (fts,),
         ).fetchall()
-    if not rows:
-        like = f"%{query}%"
-        rows = conn.execute(
+    like = f"%{query}%"
+    extra_sql = """
+        SELECT id, display_name, cited_by_count FROM journals
+        WHERE display_name LIKE ? COLLATE NOCASE
+           OR publisher LIKE ? COLLATE NOCASE
+           OR IFNULL(alternate_titles, '') LIKE ? COLLATE NOCASE
+    """
+    try:
+        extra = conn.execute(extra_sql, (like, like, like)).fetchall()
+    except sqlite3.OperationalError:
+        extra = conn.execute(
             """
             SELECT id, display_name, cited_by_count FROM journals
             WHERE display_name LIKE ? COLLATE NOCASE
@@ -172,13 +411,19 @@ def _name_hits(conn: sqlite3.Connection, query: str) -> dict[int, ScoredHit]:
             """,
             (like, like),
         ).fetchall()
+    seen_ids = {row["id"] for row in rows}
+    rows = list(rows)
+    for row in extra:
+        if row["id"] not in seen_ids:
+            rows.append(row)
+            seen_ids.add(row["id"])
     q_low = query.lower()
     for row in rows:
         score = 2.0
         name = (row["display_name"] or "").lower()
         if name == q_low:
             score = 8.0
-        elif name.startswith(q_low):
+        elif name.startswith(q_low) or q_low in name:
             score = 5.0
         hits[row["id"]] = ScoredHit(journal_id=row["id"], name_score=score)
     return hits
@@ -193,17 +438,16 @@ def _allowed_journal_ids(
 ) -> set[int] | None:
     if not extra_and and not filter_params:
         return None
-    sql = f"""
-        SELECT journals.id FROM journals
-        {join_sql}
-        {extra_and.replace("AND", "WHERE", 1) if extra_and.startswith("AND") else extra_and}
-    """
-    # extra_and is "AND m.jcr..." when filters exist; convert to WHERE
-    if extra_and:
+    if extra_and.strip():
         sql = f"""
             SELECT journals.id FROM journals
             {join_sql}
-            WHERE {extra_and.removeprefix("AND ").strip()}
+            WHERE {extra_and.strip().removeprefix("AND ").strip()}
+        """
+    else:
+        sql = f"""
+            SELECT journals.id FROM journals
+            {join_sql}
         """
     rows = conn.execute(sql, [*join_params, *filter_params]).fetchall()
     return {row[0] for row in rows}
@@ -252,6 +496,23 @@ def _metrics_where(
     return "WHERE " + " AND ".join(clauses), params
 
 
+def _where_from_and(extra_and: str) -> str:
+    text = extra_and.strip()
+    if text.startswith("AND "):
+        text = text[4:].strip()
+    if not text:
+        return ""
+    return "WHERE " + text
+
+
+def _region_where(region: str) -> tuple[str, list]:
+    if region == "cn":
+        return " AND IFNULL(journals.is_chinese, 0) = 1", []
+    if region == "intl":
+        return " AND IFNULL(journals.is_chinese, 0) = 0", []
+    return "", []
+
+
 def _hydrate(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
@@ -276,6 +537,14 @@ def _hydrate(
     ]
     official = _load_official(conn, row["id"], year)
     issns = json.loads(row["issns"] or "[]")
+    keys = row.keys()
+    alternate = []
+    if "alternate_titles" in keys and row["alternate_titles"]:
+        try:
+            alternate = json.loads(row["alternate_titles"])
+        except json.JSONDecodeError:
+            alternate = []
+    is_chinese = bool(row["is_chinese"]) if "is_chinese" in keys else False
     return Journal(
         id=row["id"],
         openalex_id=row["openalex_id"],
@@ -290,6 +559,8 @@ def _hydrate(
         citedness_2yr=row["citedness_2yr"],
         country_code=row["country_code"],
         type=row["type"],
+        alternate_titles=alternate if isinstance(alternate, list) else [],
+        is_chinese=is_chinese,
         topics=topics,
         official=official,
     )

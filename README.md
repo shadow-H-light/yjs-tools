@@ -4,7 +4,7 @@
 
 ## 选刊神器 v0.1
 
-本机同步 OpenAlex 国际刊，按刊名 / ISSN / 研究方向检索，用本地 CSV 导入分区与影响因子，对比 2–4 本刊并导出。数字只来自你导入的表。
+本机同步 OpenAlex 国际刊与中文刊，按刊名 / 主题 / ISSN 检索（中英文方向词可互译），用本地 CSV 导入分区与影响因子，对比 2–4 本刊并导出。数字只来自你导入的表。
 
 规划在 [docs](./docs/README.md)，安装与排错见 [使用说明](./docs/xuan-kan/usage.md)。
 
@@ -24,9 +24,9 @@ uv run xuankan serve
 打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。之后启动只要最后一条。
 
 ```bash
-uv run xuankan ingest --limit 200
+uv run xuankan ingest --limit 200 --scope all
 uv run xuankan import examples/metrics-sample-2025.csv --year 2025 --source sample
-uv run xuankan search 计算机视觉 --jcr 1
+uv run xuankan search 传感器 --by topic
 uv run xuankan compare 1,2
 uv run xuankan export --query Nature --out xuankan-export.csv
 ```
